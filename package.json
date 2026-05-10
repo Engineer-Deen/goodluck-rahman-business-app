@@ -1,0 +1,55 @@
+{
+  "name": "goodluck-rahman-enterprise",
+  "version": "2.2.1",
+  "description": "Good Luck Rahman Enterprise desktop app",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder",
+    "dist": "npm run package",
+    "dist:exe": "npm run package",
+    "dist:installer": "electron-builder --win nsis --x64",
+    "dist:portable": "electron-builder --win portable --x64",
+    "release:update": "node scripts/build-update-release.js",
+    "package": "node scripts/package.js"
+  },
+  "author": "Good Luck Rahman",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.6.0",
+    "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "electron-updater": "^6.6.2"
+  },
+  "build": {
+    "appId": "com.goodluck.rahman",
+    "productName": "Good Luck Rahman Enterprise",
+    "files": [
+      "src/**/*",
+      "package.json",
+      "package-lock.json"
+    ],
+    "directories": {
+      "buildResources": "src/assets",
+      "output": "package-output/installer"
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis",
+        "portable",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
