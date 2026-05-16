@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Good Luck Rahman Enterprise</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f5f7fb; margin:0; padding:0; color:#1e293b; }
+    .container { max-width:580px; margin:6rem auto; background:#fff; border-radius:16px; box-shadow:0 20px 50px rgba(15,23,42,.08); padding:2.5rem; }
+    h1 { margin:0 0 0.5rem; font-size:2rem; color:#0f172a; }
+    p { line-height:1.6; margin:1rem 0; }
+    .button { display:inline-flex; align-items:center; justify-content:center; padding:0.9rem 1.4rem; border-radius:999px; background:#1d4ed8; color:#fff; text-decoration:none; font-weight:600; border:none; cursor:pointer; }
+    .button.secondary { background:#e2e8f0; color:#0f172a; }
+    .note { margin-top:1.5rem; color:#475569; font-size:0.95rem; }
+    .alert { padding:1rem 1.2rem; border-radius:12px; border:1px solid #cbd5e1; background:#f8fafc; color:#0f172a; margin-top:1rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Good Luck Rahman Enterprise</h1>
+    <div id="content">
+      <p>Firebase hosting is configured for password reset support.</p>
+    </div>
+  </div>
+  <script>
+    function redirectToApp() {
+      const timeout = setTimeout(() => {
+        window.location.href = 'goodluckrahman://open';
+      }, 1000);
+      return timeout;
+    }
+
+    function renderMessage() {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get('mode');
+      const content = document.getElementById('content');
+      if (!content) return;
+      if (mode === 'resetPassword') {
+        content.innerHTML = `
+          <p>Your password reset was completed successfully.</p>
+          <div class="alert">You will be redirected back to the desktop app shortly.</div>
+          <a class="button" href="goodluckrahman://open">Open desktop app now</a>
+          <p class="note">If the app does not open automatically, please open Good Luck Rahman Enterprise manually.</p>
+        `;
+        redirectToApp();
+        return;
+      }
+      content.innerHTML = `
+        <p>Welcome to Good Luck Rahman Enterprise.</p>
+        <p>This page is used by Firebase password reset after the reset link is completed.</p>
+        <div class="alert">If you just completed a password reset, please use the button below to open the desktop app.</div>
+        <a class="button" href="goodluckrahman://open">Open desktop app now</a>
+        <p class="note">If the app does not open automatically, open the desktop app manually.</p>
+      `;
+    }
+    renderMessage();
+  </script>
+</body>
+</html>

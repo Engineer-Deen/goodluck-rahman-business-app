@@ -19,6 +19,9 @@
   <div class="login-orb login-orb-2"></div>
 
   <div class="login-box">
+    <button id="login-back-button" class="login-back" onclick="onLoginBackClick()" style="display:none;">
+      ← Back
+    </button>
     <!-- Brand banner with SVG logo -->
     <div class="login-banner">
       <svg class="login-svg-logo" viewBox="0 0 260 130" xmlns="http://www.w3.org/2000/svg" aria-label="Good Luck Rahman Enterprise Logo">
@@ -68,23 +71,200 @@
 
     <!-- Login form body -->
     <div class="login-body">
-      <div id="full-login-mode">
-        <div class="login-sub" style="margin-top:1.4rem;">Sign in or register with email and password</div>
-        <div class="login-note" id="owner-note">Register only if you are the designated owner.</div>      <input type="text" id="auth-name" class="auth-input" placeholder="Full Name (registration only)">        <input type="email" id="auth-email" class="auth-input" placeholder="Email address" autocomplete="email">
-        <input type="password" id="auth-password" class="auth-input" placeholder="Password" autocomplete="current-password">
+      <div id="login-welcome-mode">
+        <div class="welcome-art">
+          <div class="welcome-art-frame">
+            <img src="assets/login-photo.png" alt="Owner" class="welcome-art-image">
+          </div>
+        </div>
+        <div class="login-sub" style="margin-top:1.0rem;">Welcome to Good Luck Rahman Enterprise</div>
+        <div class="login-note">Continue with your account or create a new one.</div>
+        <div class="login-actions" style="justify-content:center; gap:1rem; margin-top:1.5rem;">
+          <button class="btn-login" onclick="switchLoginMode('login')">LOG IN</button>
+          <button class="btn-secondary" onclick="switchLoginMode('register')">CREATE ACCOUNT</button>
+        </div>
+        <div class="login-wholesale-foot" style="display:flex;flex-direction:column;gap:0.75rem;align-items:center;">
+          <div style="display:flex;gap:0.75rem;flex-wrap:wrap;justify-content:center;">
+            <button type="button" class="btn-wholesale-entry" onclick="switchLoginMode('wholesalePhone')">WHOLESALES</button>
+            <button type="button" class="btn-wholesale-entry" onclick="switchLoginMode('adminLogin')">ADMIN</button>
+          </div>
+          <div class="login-wholesale-foot-note">Wholesales and Admin access are separate from the main app.</div>
+        </div>
+      </div>
+
+      <div id="login-wholesale-phone-mode" style="display:none;">
+        <div class="login-sub" style="margin-top:1rem;">Wholesales access</div>
+        <p class="login-note wholesale-login-intro">Enter your registered phone and email, then tap SEND CODE. A 6-digit code will be emailed to you automatically.</p>
+        <div id="wholesale-login-form" class="wholesale-phone-ui">
+          <label class="wholesale-field-label" for="wholesale-login-phone-local">Registered mobile number</label>
+          <div class="wholesale-phone-row">
+            <div class="wholesale-country-chip" title="Sierra Leone">
+              <span class="wholesale-country-flag" role="img" aria-label="Sierra Leone flag">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 24" width="26" height="18" focusable="false" aria-hidden="true">
+                  <rect width="36" height="8" fill="#1eb53a"/>
+                  <rect y="8" width="36" height="8" fill="#ffffff"/>
+                  <rect y="16" width="36" height="8" fill="#0072c6"/>
+                </svg>
+              </span>
+              <span class="wholesale-country-code">+232</span>
+            </div>
+            <input type="tel" id="wholesale-login-phone-local" class="wholesale-phone-local-input" placeholder="(0) 25 123456" inputmode="numeric" autocomplete="tel-national" aria-label="Mobile number without country code">
+          </div>
+          <label class="wholesale-field-label" for="wholesale-login-email">Registered email address</label>
+          <input type="email" id="wholesale-login-email" class="wholesale-field-input" placeholder="owner@yourbusiness.com" autocomplete="email" aria-label="Registered email address">
+          <div class="wholesale-send-code-row">
+            <button type="button" class="btn-wholesale-send-code" id="wholesale-send-email-btn" onclick="void beginWholesaleEmailVerification()">SEND CODE</button>
+          </div>
+          <div id="wholesale-code-section" class="wholesale-code-section" style="display:none;" aria-hidden="true">
+            <label class="wholesale-field-label">Email verification code</label>
+            <div class="wholesale-otp-boxes" id="wholesale-otp-boxes" role="group" aria-label="6-digit verification code">
+              <input type="text" class="wholesale-otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" data-otp-index="0" aria-label="Digit 1" autocomplete="one-time-code">
+              <input type="text" class="wholesale-otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" data-otp-index="1" aria-label="Digit 2">
+              <input type="text" class="wholesale-otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" data-otp-index="2" aria-label="Digit 3">
+              <input type="text" class="wholesale-otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" data-otp-index="3" aria-label="Digit 4">
+              <input type="text" class="wholesale-otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" data-otp-index="4" aria-label="Digit 5">
+              <input type="text" class="wholesale-otp-digit" maxlength="1" inputmode="numeric" pattern="[0-9]" data-otp-index="5" aria-label="Digit 6">
+            </div>
+            <input type="hidden" id="wholesale-login-otp" value="">
+            <p class="wholesale-code-hint">Check the inbox for the email above. The code expires in 10 minutes.</p>
+            <button type="button" class="btn-wholesale-login-now btn-wholesale-verify" id="wholesale-verify-btn" onclick="void completeWholesaleEmailVerification()">LOG IN</button>
+          </div>
+        </div>
+        <div id="wholesale-login-error" class="wholesale-login-error" aria-live="polite"></div>
+        <div class="login-actions" style="justify-content:center; margin-top:0.75rem;">
+          <button type="button" class="btn-secondary" onclick="switchLoginMode('welcome')">Back to welcome</button>
+        </div>
+      </div>
+
+      <div id="login-mode" style="display:none;">
+        <div class="login-sub" style="margin-top:1.4rem;">Account login</div>
+        <div class="login-note">Enter your registered email and password. Internet is required for email login; use PIN unlock offline.</div>
+        <div class="auth-grid">
+          <input type="email" id="auth-email" class="auth-input" placeholder="Email address" autocomplete="email">
+          <div class="password-field">
+            <input type="password" id="auth-password" class="auth-input" placeholder="Password" autocomplete="current-password">
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('auth-password', this)">Show</button>
+          </div>
+        </div>
         <div class="login-actions">
-          <button class="btn-login" onclick="doLogin()">🔓 LOGIN</button>
-          <button class="btn-secondary" onclick="doRegister()">📝 REGISTER</button>
+          <button class="btn-login" id="login-submit-btn" onclick="doLogin()">🔓 LOG IN</button>
+        </div>
+        <div class="login-actions" style="justify-content:center; gap:1rem; margin-top:0.5rem;">
+          <button class="btn-secondary" onclick="switchLoginMode('forgotPassword')">Forgot password?</button>
+        </div>
+      </div>
+
+      <div id="login-admin-mode" style="display:none;">
+        <div class="login-sub" style="margin-top:1.4rem;">Admin access</div>
+        <div class="login-note">Enter the authorized admin credentials to access the admin section.</div>
+        <div class="auth-grid">
+          <input type="email" id="admin-auth-email" class="auth-input" placeholder="Admin email" autocomplete="username">
+          <div class="password-field">
+            <input type="password" id="admin-auth-password" class="auth-input" placeholder="Admin password" autocomplete="current-password">
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('admin-auth-password', this)">Show</button>
+          </div>
+        </div>
+        <div id="admin-login-error" class="login-error" style="margin-top:0.75rem; display:none; color:var(--danger);"></div>
+        <div class="login-actions">
+          <button class="btn-login" id="admin-login-submit-btn" onclick="doAdminLogin()">🔒 ADMIN LOGIN</button>
+        </div>
+        <div class="login-actions" style="justify-content:center; gap:1rem; margin-top:0.5rem;">
+          <button class="btn-secondary" onclick="switchLoginMode('welcome')">Back to welcome</button>
+        </div>
+      </div>
+
+      <div id="forgot-password-mode" style="display:none;">
+        <div class="login-sub" style="margin-top:1.4rem;">Recover your password</div>
+        <div class="login-note" id="forgot-password-note">Enter your registered email address to receive reset instructions.</div>
+        <div id="forgot-password-request-form">
+          <div class="auth-grid">
+            <input type="email" id="forgot-email" class="auth-input" placeholder="Registered email address" autocomplete="email">
+          </div>
+          <div class="login-actions">
+            <button class="btn-login" id="forgot-password-send-btn" onclick="doPasswordResetRequest()">SEND RESET EMAIL</button>
+          </div>
+          <div class="login-actions" style="justify-content:center; gap:1rem; margin-top:0.5rem;">
+            <button class="btn-secondary" onclick="switchLoginMode('login')">Back to login</button>
+          </div>
+        </div>
+        <div id="forgot-password-sent" style="display:none; margin-top:1rem;">
+          <div class="login-note sent-message">Reset code has been sent to your email.</div>
+          <div class="login-note sent-code" id="forgot-password-sent-code" style="display:none; margin-top:0.8rem; font-size:0.95rem; color:var(--text-secondary);"></div>
+          <div class="login-actions" style="justify-content:center; gap:1rem; margin-top:0.75rem;">
+            <button class="btn-secondary" id="forgot-password-continue-btn" onclick="showForgotPasswordCodeEntry()" style="display:none;">Continue to reset</button>
+            <button class="btn-secondary" onclick="switchLoginMode('login')">Back to login</button>
+          </div>
+        </div>
+        <div id="forgot-password-code-row" style="display:none; margin-top:1rem;">
+          <div class="auth-grid">
+            <input type="text" id="forgot-password-code" class="auth-input" placeholder="Recovery code">
+            <div class="password-field">
+              <input type="password" id="forgot-password-new" class="auth-input" placeholder="New password" autocomplete="new-password">
+              <button type="button" class="password-toggle" onclick="togglePasswordVisibility('forgot-password-new', this)">Show</button>
+            </div>
+          </div>
+          <div class="login-actions">
+            <button class="btn-login" id="forgot-password-reset-btn" onclick="doCompletePasswordReset()">RESET PASSWORD</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="register-mode" style="display:none;">
+        <div class="login-sub" style="margin-top:1.4rem;">Create new account</div>
+        <div class="login-note">Set up your business account. Internet is required to create the account; app data can still work offline and unlock with PIN.</div>
+        <div class="auth-grid">
+          <input type="text" id="auth-register-firstname" class="auth-input" placeholder="First name">
+          <input type="text" id="auth-register-lastname" class="auth-input" placeholder="Last name">
+          <input type="email" id="auth-register-email" class="auth-input" placeholder="Email address" autocomplete="email">
+          <input type="text" id="auth-register-contact" class="auth-input" placeholder="Phone/Contact">
+          <div class="password-field">
+            <input type="password" id="auth-register-password" class="auth-input" placeholder="Create password (min 6 chars)" autocomplete="new-password">
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('auth-register-password', this)">Show</button>
+          </div>
+          <input type="text" id="auth-register-pin" class="auth-input" placeholder="Business PIN (4 digits)" autocomplete="new-password">
+        </div>
+        <div class="login-actions">
+          <button class="btn-login" id="register-submit-btn" onclick="doRegister()">📝 CREATE ACCOUNT</button>
+        </div>
+        <div class="login-actions" style="justify-content:center; gap:1rem; margin-top:0.5rem;">
+          <button class="btn-secondary" onclick="switchLoginMode('login')">Already have an account? Log in</button>
         </div>
       </div>
 
       <div id="pin-login-mode" style="display:none;">
-        <div class="login-sub" style="margin-top:1.4rem;">Enter your PIN to unlock the owner session</div>
-        <div class="login-note">The app will only ask for full login again after you log out.</div>
-        <input type="password" id="auth-pin" class="auth-input" placeholder="Enter PIN" autocomplete="one-time-code">
+        <div class="login-sub" style="margin-top:1.4rem;">Enter your PIN to unlock the app.</div>
+        <div class="password-field">
+          <input type="password" id="auth-pin" class="auth-input" placeholder="Enter PIN" autocomplete="one-time-code">
+          <button type="button" class="password-toggle" onclick="togglePasswordVisibility('auth-pin', this)">Show</button>
+        </div>
+        <div class="login-actions" style="flex-direction:column; gap:0.9rem; margin-top:1rem;">
+          <button class="btn-login" style="width:100%;" onclick="doUnlock()">🔓 UNLOCK</button>
+          <button class="btn-secondary" style="width:100%;" onclick="doLogout()">LOGOUT</button>
+        </div>
+        <div class="login-actions" style="justify-content:center; gap:1rem; margin-top:0.75rem;">
+          <button class="btn-secondary" onclick="switchLoginMode('forgotPin')">Forgot PIN?</button>
+        </div>
+      </div>
+
+      <div id="forgot-pin-mode" style="display:none;">
+        <div class="login-sub" style="margin-top:1.4rem;">Reset your app PIN</div>
+        <div class="login-note">Enter your registered email and password to reset the PIN.</div>
+        <div class="auth-grid">
+          <input type="email" id="forgot-pin-email" class="auth-input" placeholder="Registered email address" autocomplete="email">
+          <div class="password-field">
+            <input type="password" id="forgot-pin-password" class="auth-input" placeholder="Current password" autocomplete="current-password">
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('forgot-pin-password', this)">Show</button>
+          </div>
+          <div class="password-field">
+            <input type="password" id="forgot-pin-new" class="auth-input" placeholder="New PIN" autocomplete="new-password">
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('forgot-pin-new', this)">Show</button>
+          </div>
+        </div>
         <div class="login-actions">
-          <button class="btn-login" onclick="doUnlock()">🔓 UNLOCK</button>
-          <button class="btn-secondary" onclick="switchToFullLogin()">Sign in with a different account</button>
+          <button class="btn-login" onclick="doResetPin()">RESET PIN</button>
+        </div>
+        <div class="login-actions" style="justify-content:center; gap:1rem; margin-top:0.5rem;">
+          <button class="btn-secondary" onclick="switchLoginMode('pin')">Back to PIN unlock</button>
         </div>
       </div>
       <div class="login-error" id="login-error"></div>
@@ -102,7 +282,7 @@
 <div id="app">
   <header>
     <div class="brand">
-      <div class="owner-header-avatar" onclick="showPanel('profile')" title="Owner Profile">
+      <div class="owner-header-avatar" onclick="showPanel('profile')" title="User Profile">
         <img id="header-owner-avatar" src="" alt="Owner Avatar">
       </div>
       <div class="brand-icon">
@@ -141,12 +321,12 @@
         <div class="sync-dot" id="net-dot"></div>
         <span id="net-label">Offline</span>
       </div>
-      <button class="btn-header" onclick="openUpdatePanel()">CHECK FOR UPDATE</button>
+      <button class="btn-header" onclick="checkAppUpdate()">CHECK FOR UPDATE</button>
       <button class="btn-logout" onclick="doLogout()">LOGOUT</button>
     </div>
   </header>
 
-  <nav>
+  <nav id="main-nav">
     <button class="nav-tab active" onclick="showPanel('dashboard')">DASHBOARD</button>
     <button class="nav-tab" onclick="showPanel('sales')">SALES ENTRY</button>
     <button class="nav-tab" onclick="showPanel('payment')">PAYMENT DESK</button>
@@ -279,11 +459,12 @@
         <button class="view-tab" onclick="setRecView('yesterday',this)">YESTERDAY</button>
         <button class="view-tab" onclick="setRecView('monthly',this)">MONTHLY</button>
         <button class="view-tab" onclick="setRecView('yearly',this)">YEARLY</button>
+        <button class="view-tab" onclick="setRecView('history',this)">HISTORY</button>
         <button class="view-tab" onclick="setRecView('all',this)">ALL RECORDS</button>
       </div>
       <div class="stats-grid" id="rec-stats"></div>
-      <div class="card">
-        <div class="filter-bar">
+      <div class="card" id="records-card">
+        <div class="filter-bar" id="rec-filter-bar">
           <input type="text" id="rec-search" placeholder="Search customer or product" oninput="renderRecords()">
           <select id="rec-status" onchange="renderRecords()">
             <option value="">All Status</option>
@@ -296,6 +477,25 @@
             <thead><tr><th>Sale ID</th><th>Date</th><th>Customer</th><th>Product</th><th>Price</th><th>Paid</th><th>Balance</th><th>Profit</th><th>Payment Status</th><th>Action</th></tr></thead>
             <tbody id="records-table"></tbody>
           </table>
+        </div>
+      </div>
+      <div id="history-panel" style="display:none;">
+        <div class="card">
+          <div class="card-title">History Summary</div>
+          <div class="filter-bar" style="margin-bottom:0;">
+            <label style="margin-right:.75rem;">Select a year</label>
+            <select id="history-year-select" onchange="renderHistory()"></select>
+          </div>
+          <div class="stats-grid" id="history-stats"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Monthly Totals</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Month</th><th>Revenue</th><th>Profit</th><th>Qty Sold</th></tr></thead>
+              <tbody id="history-table"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
@@ -335,16 +535,6 @@
           <input type="text" id="audit-search" placeholder="Search by customer, product or reason" oninput="renderAudit()">
           <select id="audit-reason-filter" onchange="renderAudit()">
             <option value="">All Reasons</option>
-            <option value="Customer Return  Unwanted">Customer Return  Unwanted</option>
-            <option value="Customer Return  Wrong Item">Customer Return  Wrong Item</option>
-            <option value="Defective / Damaged Item">Defective / Damaged Item</option>
-            <option value="Product Quality Issue">Product Quality Issue</option>
-            <option value="Input Error  Wrong Customer">Input Error  Wrong Customer</option>
-            <option value="Input Error  Wrong Price">Input Error  Wrong Price</option>
-            <option value="Input Error  Duplicate Entry">Input Error  Duplicate Entry</option>
-            <option value="Cancelled by Customer">Cancelled by Customer</option>
-            <option value="Item Out of Stock / Discontinued">Item Out of Stock / Discontinued</option>
-            <option value="Other  See Notes">Other  See Notes</option>
           </select>
         </div>
       </div>
@@ -356,73 +546,200 @@
       </div>
     </div>
 
-    <div class="panel" id="panel-update">
-      <div class="section-header"><div class="section-title">CHECK FOR UPDATE</div><div class="section-line"></div></div>
+    <!-- WHOLESALES SECTION WITH SEPARATE NAVIGATION -->
+    <div class="panel" id="panel-wholesale">
+      <!-- Wholesales Navigation Bar -->
+      <nav id="wholesale-nav" style="display:none;background:rgba(245,200,66,0.05);border-bottom:2px solid var(--border);margin:0 -2rem 0 -2rem;padding:0 2rem;gap:0;">
+        <button class="nav-tab active" onclick="showWholesalePanel('dashboard')">📊 DASHBOARD</button>
+        <button class="nav-tab" onclick="showWholesalePanel('sales')">📝 SALES</button>
+        <button class="nav-tab" onclick="showWholesalePanel('orders')">🛒 ORDERS</button>
+        <button class="nav-tab" onclick="showWholesalePanel('inventory')">📦 INVENTORY</button>
+        <button class="nav-tab" onclick="showWholesalePanel('analytics')">📈 ANALYTICS</button>
+        <button class="nav-tab" onclick="doLogout()" style="background:rgba(201,168,76,0.15);">← LOGOUT</button>
+      </nav>
+
+      <div class="section-header">
+        <div class="section-title">📦 WHOLESALES SECTION</div>
+        <div class="section-line"></div>
+      </div>
+
+      <!-- Wholesales Dashboard Panel -->
+      <div id="wholesale-panel-dashboard" class="wholesale-sub-panel active">
+        <div class="card">
+          <div class="card-title">Wholesales Dashboard — COMING SOON</div>
+          <p style="color:var(--text-secondary);font-size:.95rem;margin-bottom:1rem;">This section is under development. The following wholesale features will be added soon:</p>
+          <ul style="color:var(--text-secondary);font-size:.95rem;line-height:1.7;margin:0;padding-left:1.2rem;">
+            <li>Bulk sales entry for reseller customers</li>
+            <li>Wholesale order management and tracking</li>
+            <li>Wholesale inventory monitoring and stock controls</li>
+            <li>Reseller analytics and performance reports</li>
+            <li>Seamless Firebase sync for wholesale transactions</li>
+          </ul>
+          <div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:1.5rem;">
+            <div style="flex:1;min-width:240px;padding:1rem;background:rgba(245,200,66,0.08);border:1px solid var(--border);border-radius:4px;">
+              <div style="font-weight:600;color:var(--gold);margin-bottom:.5rem;">📊 Analytics</div>
+              <p style="font-size:.85rem;color:var(--text-secondary);">View bulk sales analytics, reseller performance, and inventory status at a glance.</p>
+            </div>
+            <div style="flex:1;min-width:240px;padding:1rem;background:rgba(245,200,66,0.08);border:1px solid var(--border);border-radius:4px;">
+              <div style="font-weight:600;color:var(--gold);margin-bottom:.5rem;">☁️ Cloud Storage</div>
+              <p style="font-size:.85rem;color:var(--text-secondary);">All data is automatically synced to Firebase Storage. Access your data from anywhere.</p>
+            </div>
+            <div style="flex:1;min-width:240px;padding:1rem;background:rgba(245,200,66,0.08);border:1px solid var(--border);border-radius:4px;">
+              <div style="font-weight:600;color:var(--gold);margin-bottom:.5rem;">🔄 Real-time Sync</div>
+              <p style="font-size:.85rem;color:var(--text-secondary);">Changes sync seamlessly across all devices in real-time.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wholesales Sales Panel -->
+      <div id="wholesale-panel-sales" class="wholesale-sub-panel" style="display:none;">
+        <div class="section-header"><div class="section-title">Wholesales Sales Entry</div><div class="section-line"></div></div>
+        <div class="card">
+          <div class="card-title">New Wholesale Sale</div>
+          <p style="color:var(--text-secondary);font-size:.9rem;margin-bottom:1rem;">Create new wholesale sales transactions with automatic Firebase Storage syncing.</p>
+          <div class="form-grid">
+            <div class="form-group"><label>Reseller Name</label><input type="text" id="ws-customer" placeholder="Enter reseller name"></div>
+            <div class="form-group"><label>Product</label><select id="ws-product"><option value=""> Select Product </option></select></div>
+            <div class="form-group"><label>Selling Price (NLe)</label><input type="number" id="ws-price" placeholder="0.00"></div>
+            <div class="form-group"><label>Quantity</label><input type="number" id="ws-qty" value="1" min="1"></div>
+          </div>
+          <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:1rem;">
+            <button class="btn btn-primary" onclick="saveWholesaleSale()">SAVE WHOLESALE SALE</button>
+            <button class="btn btn-secondary" onclick="clearWholesaleSaleForm()">CLEAR</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wholesales Orders Panel -->
+      <div id="wholesale-panel-orders" class="wholesale-sub-panel" style="display:none;">
+        <div class="section-header"><div class="section-title">Bulk Orders Management</div><div class="section-line"></div></div>
+        <div class="card">
+          <div class="card-title">Wholesale Orders</div>
+          <p style="color:var(--text-secondary);font-size:.9rem;margin-bottom:1rem;">Manage bulk orders with wholesale pricing tiers. All orders are stored in Firebase Storage.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Order ID</th><th>Date</th><th>Reseller</th><th>Product</th><th>Qty</th><th>Total</th><th>Status</th></tr></thead>
+              <tbody id="wholesale-orders-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wholesales Inventory Panel -->
+      <div id="wholesale-panel-inventory" class="wholesale-sub-panel" style="display:none;">
+        <div class="section-header"><div class="section-title">Wholesale Inventory</div><div class="section-line"></div></div>
+        <div class="card">
+          <div class="card-title">Inventory Management</div>
+          <p style="color:var(--text-secondary);font-size:.9rem;margin-bottom:1rem;">Track wholesale inventory levels and stock movements.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Product</th><th>Stock</th><th>Reserved</th><th>Available</th><th>Last Updated</th></tr></thead>
+              <tbody id="wholesale-inventory-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wholesales Analytics Panel -->
+      <div id="wholesale-panel-analytics" class="wholesale-sub-panel" style="display:none;">
+        <div class="section-header"><div class="section-title">Wholesale Analytics</div><div class="section-line"></div></div>
+        <div class="card">
+          <div class="card-title">Sales Analytics</div>
+          <p style="color:var(--text-secondary);font-size:.9rem;margin-bottom:1rem;">View comprehensive analytics for wholesale operations.</p>
+          <div style="padding:2rem;text-align:center;color:var(--text-secondary);">Analytics data will appear here as wholesale sales are recorded and synced to Firebase Storage.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-admin" style="display:none;">
+      <div class="section-header"><div class="section-title">⚙️ ADMIN CONSOLE</div><div class="section-line"></div></div>
       <div class="card">
-        <div class="card-title">App Update Center</div>
-        <div style="display:flex;flex-direction:column;gap:1rem;">
-          <div style="font-size:0.95rem;color:var(--text-secondary);">
-            Verify the app version and download updates manually when a new release is available.
+        <div class="card-title">System Management</div>
+        <p style="color:var(--text-secondary);font-size:.9rem;margin-bottom:1rem;">This admin dashboard is isolated from both the main app and the wholesales interface. Only the authorized admin may access it.</p>
+      </div>
+      <div class="card" id="admin-wholesale-admin-card">
+        <div class="card-title">Wholesales Authorized Users</div>
+        <p class="wholesale-admin-intro">Add phone numbers and emails that may receive a wholesale login code. These settings sync to Firebase Storage.</p>
+        <div class="wholesale-admin-form">
+          <div class="form-group"><label>Mobile number</label>
+            <div class="wholesale-phone-row wholesale-admin-phone-row">
+              <div class="wholesale-country-chip" title="Sierra Leone"><span class="wholesale-country-code">+232</span></div>
+              <input type="tel" id="wholesale-admin-phone" class="wholesale-phone-local-input" placeholder="(0) 25 123456" inputmode="numeric">
+            </div>
           </div>
-          <div style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center;">
-            <button class="btn btn-primary" onclick="checkAppUpdate()">CHECK FOR UPDATE</button>
-            <button class="btn btn-secondary" id="download-update-btn" style="display:none;">DOWNLOAD UPDATE</button>
-            <div style="font-size:0.9rem;color:var(--text-secondary);">Current version: <span id="current-app-version">-</span></div>
-          </div>
-          <div id="update-status-message" style="padding:1rem; background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--text-secondary); min-height:3rem; border-radius:4px;">
-            Click the button above to check for available updates.
-          </div>
+          <div class="form-group"><label>Email address</label><input type="email" id="wholesale-admin-email" placeholder="user@example.com"></div>
+          <button type="button" class="btn btn-primary" onclick="void addWholesaleAdminUser()">ADD USER</button>
+          <p class="wholesale-admin-intro" style="margin:0.5rem 0 0;font-size:0.8rem;">Only these phone + email pairs can receive a login code by email.</p>
+        </div>
+        <div id="wholesale-admin-status" class="wholesale-admin-status" aria-live="polite"></div>
+        <ul id="wholesale-admin-user-list" class="wholesale-admin-user-list"></ul>
+      </div>
+      <div class="card">
+        <div class="card-title">System Information</div>
+        <div style="font-size:.9rem;color:var(--text-secondary);line-height:1.6;">
+          <div style="margin-bottom:.75rem;"><strong>App Version:</strong> <span id="admin-app-version">-</span></div>
+          <div style="margin-bottom:.75rem;"><strong>Database:</strong> Firebase Firestore + Storage</div>
+          <div style="margin-bottom:.75rem;"><strong>Wholesales Users Registered:</strong> <span id="admin-wholesale-count">0</span></div>
+          <div><strong>Last Sync:</strong> <span id="admin-last-sync">Never</span></div>
         </div>
       </div>
     </div>
 
     <div class="panel" id="panel-profile">
-      <div class="section-header"><div class="section-title">OWNER PROFILE</div><div class="section-line"></div></div>
-      <div class="card" style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;">
-        <div class="owner-photo-section">
-          <div class="owner-photo" id="profile-owner-photo">
-            <img id="profile-owner-img" src="" alt="Owner Profile" style="display:none;">
-            <div class="owner-photo-placeholder">Owner photo will appear here</div>
-          </div>
-          <button class="btn btn-secondary" style="margin-top:1rem;" onclick="uploadOwnerPhoto()">UPLOAD PHOTO</button>
+      <div class="section-header"><div class="section-title">USER PROFILE</div><div class="section-line"></div></div>
+      <div class="card" id="profile-lock-card">
+        <div class="card-title">Secure Profile Access</div>
+        <div style="margin-bottom:1rem;color:var(--text-secondary);">Enter your account password to view or edit profile details. This is the same password you registered with, not the PIN.</div>
+        <div class="form-group password-field"><label>Password</label><input type="password" id="profile-unlock-password" placeholder="Enter your password"><button type="button" class="password-toggle" onclick="togglePasswordVisibility('profile-unlock-password', this)">Show</button></div>
+        <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:1rem;">
+          <button class="btn btn-primary" onclick="unlockProfileSection()">UNLOCK PROFILE</button>
+          <button class="btn btn-secondary" onclick="lockProfileSection()">CANCEL</button>
         </div>
-        <div style="flex:1;min-width:220px;">
-          <div class="stat-label">Owner Name</div>
-          <div id="profile-owner-name" style="font-size:1.3rem;font-weight:700;color:var(--gold);">Owner</div>
-          <div style="margin-top:.75rem;">
-            <input type="text" id="profile-owner-display-name" placeholder="Update owner display name" style="width:100%;padding:.7rem .9rem;border:1px solid var(--border);border-radius:4px;background:var(--navy-surface);color:var(--text);" />
+        <div id="profile-unlock-error" style="margin-top:1rem;color:var(--danger);font-size:.9rem;"></div>
+      </div>
+      <div class="card" id="profile-details-card" style="display:none;">
+        <div class="card-title">Profile Details</div>
+        <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:flex-start;">
+          <div class="owner-photo-section">
+            <div class="owner-photo" id="profile-owner-photo">
+              <img id="profile-owner-img" src="" alt="Profile Photo" style="display:none;">
+              <div class="owner-photo-placeholder">Profile photo</div>
+            </div>
+            <button class="btn btn-secondary" style="margin-top:1rem;" onclick="selectProfilePhoto()">UPLOAD PHOTO</button>
+            <input type="file" id="profile-photo-input" accept="image/*" style="display:none;" onchange="handleProfilePhotoSelected(event)">
           </div>
-          <button class="btn btn-primary" style="margin-top:.75rem;" onclick="updateOwnerDisplayName()">SAVE OWNER NAME</button>
-          <div id="profile-owner-email" style="margin-top:.75rem;color:var(--text-secondary);">Email not configured</div>
-          <div id="profile-owner-created" style="margin-top:.5rem;color:var(--text-dim);font-size:.85rem;">Profile created date will appear here</div>
-          <div style="margin-top:1rem;"><span class="badge badge-info">Owner Session</span></div>
+          <div style="flex:1;min-width:240px;">
+            <div class="form-group"><label>Full Name</label><input type="text" id="profile-owner-fullname" placeholder="Full name"></div>
+            <div class="form-group"><label>Contact Number</label><input type="text" id="profile-owner-contact" placeholder="Contact number"></div>
+            <div class="form-group"><label>Email Address</label><input type="email" id="profile-owner-email-input" placeholder="Email address"></div>
+            <div class="form-group"><label>Created</label><div id="profile-owner-created" style="padding:.65rem .9rem;background:rgba(0,0,0,0.05);border:1px solid var(--border);border-radius:4px;">-</div></div>
+            <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:1rem;">
+              <button class="btn btn-primary" onclick="saveProfileChanges()">SAVE PROFILE</button>
+              <button class="btn btn-secondary" onclick="lockProfileSection()">LOCK PROFILE</button>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="card">
-        <div class="card-title">Manage Account</div>
+      <div class="card" id="profile-security-card" style="display:none;">
+        <div class="card-title">Security Settings</div>
         <div class="form-grid">
-          <div class="form-group"><label>Current Password</label><input type="password" id="profile-current-password" placeholder="Enter current password"></div>
-          <div class="form-group"><label>New Email</label><input type="email" id="profile-new-email" placeholder="Enter new email"></div>
-        </div>
-        <div class="form-grid" style="margin-top:1rem;">
-          <div class="form-group"><label>New Password</label><input type="password" id="profile-new-password" placeholder="Enter new password"></div>
-          <div class="form-group"><label>Confirm Password</label><input type="password" id="profile-confirm-password" placeholder="Confirm new password"></div>
+          <div class="form-group password-field"><label>Current Password</label><input type="password" id="profile-current-password" placeholder="Enter current password"><button type="button" class="password-toggle" onclick="togglePasswordVisibility('profile-current-password', this)">Show</button></div>
+          <div class="form-group password-field"><label>New Password</label><input type="password" id="profile-new-password" placeholder="Enter new password"><button type="button" class="password-toggle" onclick="togglePasswordVisibility('profile-new-password', this)">Show</button></div>
+          <div class="form-group password-field"><label>Confirm Password</label><input type="password" id="profile-confirm-password" placeholder="Confirm new password"><button type="button" class="password-toggle" onclick="togglePasswordVisibility('profile-confirm-password', this)">Show</button></div>
         </div>
         <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap;">
           <button class="btn btn-primary" onclick="updateEmailPassword()">SAVE EMAIL / PASSWORD</button>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Change Unlock PIN</div>
-        <div class="form-grid">
-          <div class="form-group"><label>Current PIN</label><input type="password" id="profile-current-pin" placeholder="Enter current PIN"></div>
-          <div class="form-group"><label>New PIN</label><input type="password" id="profile-new-pin" placeholder="Enter new PIN"></div>
+        <div class="form-grid" style="margin-top:1.5rem;">
+          <div class="form-group password-field"><label>Current PIN</label><input type="password" id="profile-current-pin" placeholder="Enter current PIN"><button type="button" class="password-toggle" onclick="togglePasswordVisibility('profile-current-pin', this)">Show</button></div>
+          <div class="form-group password-field"><label>New PIN</label><input type="password" id="profile-new-pin" placeholder="Enter new PIN"><button type="button" class="password-toggle" onclick="togglePasswordVisibility('profile-new-pin', this)">Show</button></div>
         </div>
         <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap;">
           <button class="btn btn-primary" onclick="updateAppPin()">SAVE PIN</button>
         </div>
       </div>
-      <div class="card">
+      <div class="card" id="profile-credit-card" style="display:none;">
         <div class="card-title">Developer Credit</div>
         <p style="font-size:.95rem;color:var(--text-secondary);">Developed by <strong>DevSecOps Engr (Deen)</strong>.</p>
       </div>
@@ -503,9 +820,37 @@
 
 <div id="toast"></div>
 
+<!-- ADMIN LOGIN MODAL -->
+<div class="modal-overlay" id="modal-admin-login" style="display:none;">
+  <div class="modal">
+    <button class="modal-close" onclick="closeAdminLoginModal()">X</button>
+    <div class="modal-title">Admin Access Verification</div>
+    <p style="font-size:.9rem;color:var(--text-secondary);margin-bottom:1.5rem;">This section requires administrator credentials. Please enter your admin email and password to proceed.</p>
+    
+    <div class="form-group">
+      <label>Admin Email</label>
+      <input type="email" id="admin-login-email" placeholder="Admin email" autocomplete="off">
+    </div>
+    
+    <div class="form-group password-field">
+      <label>Admin Password</label>
+      <input type="password" id="admin-login-password" placeholder="Admin password" autocomplete="off">
+      <button type="button" class="password-toggle" onclick="togglePasswordVisibility('admin-login-password', this)">Show</button>
+    </div>
+    
+    <div id="admin-login-error" style="color:var(--danger);font-size:.85rem;margin-bottom:1rem;display:none;"></div>
+    
+    <div style="display:flex;gap:.75rem;">
+      <button class="btn btn-primary" onclick="verifyAdminLogin()">VERIFY & LOGIN</button>
+      <button class="btn btn-secondary" onclick="closeAdminLoginModal()">CANCEL</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
