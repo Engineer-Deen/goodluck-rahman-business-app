@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "site": "my-desktop-app-4ee05",
+    "public": "public",
+    "ignore": ["firebase.json", ".firebaserc", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

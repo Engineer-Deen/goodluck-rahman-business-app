@@ -1,6 +1,6 @@
 {
   "name": "goodluck-rahman-enterprise",
-  "version": "2.2.1",
+  "version": "3.2.1",
   "description": "Good Luck Rahman Enterprise desktop app",
   "main": "src/main.js",
   "scripts": {

@@ -1,4 +1,27 @@
 ﻿const electronAvailable = typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.storeGetSync === 'function';
+const CURRENT_ACCOUNT_KEY='glr_current_account';
+/** Persists last business account email so recovery flows work after logout (scoped data keys use email). */
+const LAST_PROFILE_EMAIL_KEY='glr_last_profile_email';
+
+function normalizeAccountId(value){
+  return (value||'').toString().toLowerCase().trim();
+}
+function getCurrentAccount(){
+  return normalizeAccountId(DB.get(CURRENT_ACCOUNT_KEY) || '');
+}
+function setCurrentAccount(email){
+  const normalized = normalizeAccountId(email);
+  if(normalized){
+    DB.set(CURRENT_ACCOUNT_KEY, normalized);
+  } else {
+    DB.delete(CURRENT_ACCOUNT_KEY);
+  }
+  return normalized;
+}
+function getScopedStorageKey(key, accountEmail){
+  const account = normalizeAccountId(accountEmail || getCurrentAccount());
+  return account ? `${key}::${account}` : key;
+}
 
 const DB={
   get(k){
@@ -20,16 +43,19 @@ const DB={
       localStorage.removeItem(k);
     } catch(e){}
   },
-  getSales(){return this.get('glr_sales')||[];},
-  setSales(v){this.set('glr_sales',v);},
-  getAudit(){return this.get('glr_audit')||[];},
-  setAudit(v){this.set('glr_audit',v);},
-  getInventory(){return this.get('glr_inventory')||[];},
-  setInventory(v){this.set('glr_inventory',v);},
-  getSyncQueue(){return this.get('glr_sync_queue')||[];},
-  setSyncQueue(v){this.set('glr_sync_queue',v);},
-  getSyncState(){return this.get('glr_sync_state')||{};},
-  setSyncState(v){this.set('glr_sync_state',v);},
+  getScoped(k, accountEmail){return this.get(getScopedStorageKey(k, accountEmail));},
+  setScoped(k,v, accountEmail){this.set(getScopedStorageKey(k, accountEmail),v);},
+  deleteScoped(k, accountEmail){this.delete(getScopedStorageKey(k, accountEmail));},
+  getSales(accountEmail){return this.getScoped('glr_sales', accountEmail)||[];},
+  setSales(v, accountEmail){this.setScoped('glr_sales',v, accountEmail);},
+  getAudit(accountEmail){return this.getScoped('glr_audit', accountEmail)||[];},
+  setAudit(v, accountEmail){this.setScoped('glr_audit',v, accountEmail);},
+  getInventory(accountEmail){return this.getScoped('glr_inventory', accountEmail)||[];},
+  setInventory(v, accountEmail){this.setScoped('glr_inventory',v, accountEmail);},
+  getSyncQueue(accountEmail){return this.getScoped('glr_sync_queue', accountEmail)||[];},
+  setSyncQueue(v, accountEmail){this.setScoped('glr_sync_queue',v, accountEmail);},
+  getSyncState(accountEmail){return this.getScoped('glr_sync_state', accountEmail)||{};},
+  setSyncState(v, accountEmail){this.setScoped('glr_sync_state',v, accountEmail);},
 };
 
 const GOOGLE_SCRIPT_WEB_APP_URL=''; // Optional fallback. Preferred: set inside app when prompted.
@@ -41,10 +67,67 @@ const FIREBASE_CONFIG={
   messagingSenderId:'REDACTED (Firebase Sender ID)',
   appId:'1:REDACTED (Firebase Sender ID):web:1a0880f8952f9b11a7654e',
 };
+/**
+ * Wholesales email verification: register users in WHOLESALE_REGISTERED_USERS and/or Firestore meta/appConfig.wholesaleAllowedUsers.
+ * Each entry needs phone (E.164) and email.
+ * Email delivery (free, no payment): EmailJS (https://www.emailjs.com — 200 emails/month, no card) or
+ * Firebase Extension "Trigger Email" (Firestore `mail` collection + Gmail SMTP). Dev toast if neither is set.
+ * Optional Firestore: meta/appConfig.wholesaleEmailDelivery — same shape as WHOLESALE_EMAIL_DELIVERY below.
+ */
 const OWNER_EMAIL=''; // Optional: lock login to one owner email if set.
 const FIRESTORE_CONFIG_COLLECTION='meta';
 const FIRESTORE_CONFIG_DOC='appConfig';
 const DEFAULT_OWNER_PHOTO='assets/login-photo.png';
+const USER_PASSWORD_KEY='glr_user_password';
+const FIREBASE_RESET_URL='https://my-desktop-app-4ee05.web.app/?mode=resetPassword';
+/** Persists successful Wholesales email gate until logout. */
+const WHOLESALE_ACCESS_KEY='glr_wholesale_email_access';
+/**
+ * Developer-registered wholesales users (phone + email + access configuration code).
+ * Optional Firestore: meta/appConfig field `wholesaleAllowedUsers` — array of { phone, email }.
+ */
+/**
+ * Built-in fallback (works offline). Also add users in Profile → Wholesales authorized users.
+ * Phone must be E.164 e.g. +23274132162
+ */
+const WHOLESALE_REGISTERED_USERS=[
+  { phone:'+23274132162', email:'abduldeenkamara06@gmail.com' },
+];
+const WHOLESALE_USERS_CACHE_KEY='glr_wholesale_allowed_users_cache';
+const WHOLESALE_REGISTRY_FETCH_MS=2500;
+const WHOLESALE_REGISTRY_TTL_MS=60*1000;
+const WHOLESALE_EMAIL_FETCH_MS=8000;
+const MSG_WHOLESALE_NOT_REGISTERED='This phone number or email address is not registered yet. Ask your administrator to add you in the main app: Profile → Wholesales authorized users.';
+/**
+ * Email delivery for wholesales OTP (all free tiers, no credit card).
+ * mode: 'auto' | 'emailjs' | 'firebase' | 'dev'
+ *
+ * EmailJS (easiest): https://www.emailjs.com → sign up → Email Services (Gmail) → Email Templates.
+ * Template To field: {{email}} (or {{to_email}}). Subject: {{subject}}. Body: {{passcode}} and/or {{message}}.
+ * Account → API keys → Public Key. Paste publicKey, serviceId, templateId below (or in Firestore wholesaleEmailDelivery).
+ *
+ * Firebase: Console → Extensions → "Trigger Email" → SMTP (Gmail app password works). Collection name: mail.
+ */
+const WHOLESALE_EMAIL_DELIVERY={
+  mode:'auto',
+  brandName:'Good Luck Rahman Enterprise',
+  websiteLink:'', // Optional: shown in EmailJS template as {{website_link}}
+  /** Set true only after installing Firebase Extension "Trigger Email" (otherwise use EmailJS). */
+  firebaseEnabled:false,
+  firebaseMailCollection:'mail',
+  emailjs:{
+    enabled:true,
+    publicKey:'UCXgLqGeMlxHl_pEh',
+    serviceId:'service_xm7b98n',
+    templateId:'template_3aa2wd6',
+  },
+};
+const WHOLESALE_OTP_TTL_MS=10*60*1000;
+const WHOLESALE_OTP_RESEND_MS=60*1000;
+/** Country prefix for the wholesale phone field when users enter local digits only (Sierra Leone). */
+const WHOLESALE_DEFAULT_DIAL_CODE='+232';
+const MSG_WHOLESALE_NOT_ACTIVATED='No wholesales users are set up yet. Log in to the main app → Profile → Wholesales authorized users → add phone and email.';
+const MSG_WHOLESALE_UNAUTHORIZED='You are not authorized to use this service. If you need access, please contact your administrator.';
 /** Try these bundled names if login-photo.png is missing (same folder: src/assets/). */
 const BUNDLED_OWNER_PHOTO_CANDIDATES=[
   'assets/login-photo.png',
@@ -54,6 +137,7 @@ const BUNDLED_OWNER_PHOTO_CANDIDATES=[
 ];
 const DEVICE_ID_KEY='glr_device_id';
 const OWNER_PIN_KEY='glr_owner_pin';
+const OWNER_PHONE_KEY='glr_owner_phone';
 const EXPLICIT_LOGOUT_KEY='glr_explicit_logout';
 const OWNER_PROFILE_KEY='glr_owner_profile';
 const SYNC_URL_KEY='glr_sync_url';
@@ -61,14 +145,27 @@ const UPDATE_URL_HELP='Example: https://goodluckrahmanenterprise.netlify.app/';
 let syncDebounceTimer=null;
 let syncInProgress=false;
 let syncIntervalTimer=null;
+let offlineSyncRetryTimer=null;  // Retry timer for when connection restores
 let justLoggedIn=false;
+let lastNetworkOnline=null;
+let pendingRegistrationPhoto=null;
+let profileAccessUnlocked=false;
+/** True when user opened wholesale from the login welcome CTA (show nav tab before full auth). */
+let wholesaleBrowseWithoutLogin=false;
+let wholesaleRegisteredUsers=[];
+let wholesaleAdminUsersCache=[];
+let wholesalePendingOtpSession=null;
+let wholesaleEmailSendInFlight=false;
+let lastLoginOverlayMode='welcome';
 
-function getOwnerPin(){
-  return DB.get(OWNER_PIN_KEY) || '1234';
+function getOwnerPin(accountEmail){
+  const acct=normalizeAccountId(accountEmail||getCurrentAccount()||getPrimaryAccountEmail());
+  return DB.getScoped(OWNER_PIN_KEY, acct) || '1234';
 }
-function setOwnerPin(pin){
+function setOwnerPin(pin, accountEmail){
   if(!pin) return;
-  DB.set(OWNER_PIN_KEY, pin.trim());
+  const acct=normalizeAccountId(accountEmail||getCurrentAccount()||getPrimaryAccountEmail());
+  DB.setScoped(OWNER_PIN_KEY, pin.trim(), acct);
 }
 function isExplicitLogout(){
   return DB.get(EXPLICIT_LOGOUT_KEY)===true;
@@ -76,12 +173,13 @@ function isExplicitLogout(){
 function setExplicitLogout(value){
   DB.set(EXPLICIT_LOGOUT_KEY, !!value);
 }
-function getOwnerProfileData(){
-  return DB.get(OWNER_PROFILE_KEY) || { name:'Owner', email:'owner@example.com', createdAt:'-' };
+function getOwnerProfileData(accountEmail){
+  return DB.getScoped(OWNER_PROFILE_KEY, accountEmail) || { name:'User', email:'', contact:'', photo:'', authProvider:'local', createdAt:'-', updatedAt:'-' };
 }
-function saveOwnerProfile(email, fullName){
+function saveOwnerProfile(email, fullName, contact, photo, provider='local'){
   const normalized=(email||'').toLowerCase().trim();
-  const defaultName = 'Owner';
+  const profile = getOwnerProfileData(normalized);
+  const defaultName = 'User';
   let name = defaultName;
   if(fullName?.trim()){
     name = fullName.trim().split(/\s+/).map(word=>word[0]?.toUpperCase()+word.slice(1).toLowerCase()).join(' ');
@@ -89,15 +187,24 @@ function saveOwnerProfile(email, fullName){
     const rawName = normalized.split('@')[0] || defaultName;
     name = rawName.split(/[^a-zA-Z0-9]+/).filter(Boolean).map(word=>word[0]?.toUpperCase()+word.slice(1).toLowerCase()).join(' ') || defaultName;
   }
-  const profile = getOwnerProfileData();
   const saved = {
     ...profile,
     name,
     email: normalized || profile.email,
+    contact: contact?.trim() || profile.contact || '',
+    photo: photo !== undefined ? photo : profile.photo || DB.getScoped('owner_photo', normalized) || '',
+    authProvider: provider || profile.authProvider || 'local',
     updatedAt: new Date().toISOString(),
     createdAt: profile.createdAt==='-' ? new Date().toISOString() : profile.createdAt,
   };
-  DB.set(OWNER_PROFILE_KEY, saved);
+  setCurrentAccount(normalized);
+  if(normalized) DB.set(LAST_PROFILE_EMAIL_KEY, normalized);
+  DB.setScoped(OWNER_PROFILE_KEY, saved, normalized);
+  if(saved.photo){
+    DB.setScoped('owner_photo', saved.photo, normalized);
+  } else {
+    DB.deleteScoped('owner_photo', normalized);
+  }
   return saved;
 }
 function titleCase(value){
@@ -108,8 +215,7 @@ function renderOwnerProfile(){
   const profile=getOwnerProfileData();
   const img=document.getElementById('profile-owner-img');
   const placeholder=document.querySelector('#profile-owner-photo .owner-photo-placeholder');
-  const stored=DB.get('owner_photo');
-  const raw=stored||firstBundledOwnerPhotoPath();
+  const raw=profile.photo || DB.getScoped('owner_photo');
   const headerAvatar=document.getElementById('header-owner-avatar');
   if(img){
     if(raw){
@@ -128,14 +234,154 @@ function renderOwnerProfile(){
       headerAvatar.src='';
     }
   }
-  const nameEl=document.getElementById('profile-owner-name');
-  const emailEl=document.getElementById('profile-owner-email');
+  const nameInput=document.getElementById('profile-owner-fullname');
+  const contactInput=document.getElementById('profile-owner-contact');
+  const emailInput=document.getElementById('profile-owner-email-input');
   const createdEl=document.getElementById('profile-owner-created');
-  const displayNameInput=document.getElementById('profile-owner-display-name');
-  if(nameEl) nameEl.textContent=profile.name||'Owner';
-  if(displayNameInput) displayNameInput.value=profile.name||'';
-  if(emailEl) emailEl.textContent=profile.email||'Email not configured';
-  if(createdEl) createdEl.textContent = profile.createdAt && profile.createdAt !== '-' ? `Profile created: ${new Date(profile.createdAt).toLocaleString()}` : '';
+  if(nameInput) nameInput.value=profile.name||'';
+  if(contactInput) contactInput.value=profile.contact||'';
+  if(emailInput) emailInput.value=profile.email||'';
+  if(createdEl) createdEl.textContent = profile.createdAt && profile.createdAt !== '-' ? new Date(profile.createdAt).toLocaleString() : 'Not set';
+}
+function getUserPassword(accountEmail){
+  return DB.getScoped(USER_PASSWORD_KEY, accountEmail) || '';
+}
+function setUserPassword(password, accountEmail){
+  if(!password) return;
+  DB.setScoped(USER_PASSWORD_KEY, password, accountEmail);
+}
+function renderProfileSection(){
+  const lockCard=document.getElementById('profile-lock-card');
+  const detailsCard=document.getElementById('profile-details-card');
+  const securityCard=document.getElementById('profile-security-card');
+  const creditCard=document.getElementById('profile-credit-card');
+  if(lockCard) lockCard.style.display = profileAccessUnlocked ? 'none' : '';
+  if(detailsCard) detailsCard.style.display = profileAccessUnlocked ? '' : 'none';
+  if(securityCard) securityCard.style.display = profileAccessUnlocked ? '' : 'none';
+  if(creditCard) creditCard.style.display = profileAccessUnlocked ? '' : 'none';
+  if(profileAccessUnlocked){
+    document.getElementById('profile-unlock-password').value='';
+    document.getElementById('profile-unlock-error').textContent='';
+  }
+  renderOwnerProfile();
+}
+async function loadAdminPanel(){
+  const appVersion=document.getElementById('admin-app-version');
+  const wholesaleCount=document.getElementById('admin-wholesale-count');
+  const lastSync=document.getElementById('admin-last-sync');
+  
+  if(appVersion){
+    if(window.electronAPI?.getAppVersion){
+      try{
+        const version = await window.electronAPI.getAppVersion();
+        appVersion.textContent = version || '2.0.0';
+      }catch(_){
+        appVersion.textContent = '2.0.0';
+      }
+    } else {
+      appVersion.textContent='2.0.0';
+    }
+  }
+  
+  await refreshWholesaleRegisteredUsers();
+  if(wholesaleCount) wholesaleCount.textContent=(wholesaleRegisteredUsers||[]).length;
+  
+  const lastSyncTime=DB.get('glr_last_sync_time');
+  if(lastSync){
+    if(lastSyncTime){
+      try{
+        lastSync.textContent=new Date(lastSyncTime).toLocaleString();
+      }catch(_e){
+        lastSync.textContent='Recently';
+      }
+    } else {
+      lastSync.textContent='Never';
+    }
+  }
+  
+  await loadWholesaleAdminUsers();
+}
+async function validateProfilePassword(password){
+  const profile=getOwnerProfileData();
+  if(!profile.email) return false;
+  const storedPassword=getUserPassword();
+  if(storedPassword){
+    return password === storedPassword;
+  }
+  if(firebaseAuth && getCurrentUser() && getCurrentUser().email===profile.email){
+    try{
+      const credential=firebase.auth.EmailAuthProvider.credential(profile.email,password);
+      await getCurrentUser().reauthenticateWithCredential(credential);
+      return true;
+    }catch(_e){
+      return false;
+    }
+  }
+  return false;
+}
+async function unlockProfileSection(){
+  const password=(document.getElementById('profile-unlock-password')||{}).value?.trim();
+  if(!password){
+    document.getElementById('profile-unlock-error').textContent='Enter your password to unlock profile.';
+    return;
+  }
+  const valid=await validateProfilePassword(password);
+  if(!valid){
+    document.getElementById('profile-unlock-error').textContent='Password is incorrect. Please try again.';
+    return;
+  }
+  profileAccessUnlocked=true;
+  renderProfileSection();
+}
+function lockProfileSection(){
+  profileAccessUnlocked=false;
+  renderProfileSection();
+}
+function saveProfileChanges(){
+  const fullName=(document.getElementById('profile-owner-fullname')||{}).value.trim();
+  const contact=(document.getElementById('profile-owner-contact')||{}).value.trim();
+  const email=(document.getElementById('profile-owner-email-input')||{}).value.trim();
+  if(!fullName||!email){
+    toast('Enter your name and email to save profile.','danger');
+    return;
+  }
+  const profile=getOwnerProfileData();
+  const updatedProfile=saveOwnerProfile(email, fullName, contact, profile.photo, profile.authProvider);
+  queueSync('update_profile', updatedProfile);
+  toast('Profile details saved.','success');
+  renderOwnerProfile();
+}
+function selectRegistrationPhoto(){
+  document.getElementById('auth-photo-input')?.click();
+}
+function handleRegistrationPhotoSelected(event){
+  const file=event.target.files?.[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    pendingRegistrationPhoto=e.target.result;
+    const img=document.getElementById('register-photo-preview');
+    const placeholder=document.querySelector('#register-photo-preview-wrapper .photo-placeholder');
+    if(img){img.src=pendingRegistrationPhoto;img.style.display='block';}
+    if(placeholder) placeholder.style.display='none';
+  };
+  reader.readAsDataURL(file);
+}
+function selectProfilePhoto(){
+  document.getElementById('profile-photo-input')?.click();
+}
+function handleProfilePhotoSelected(event){
+  const file=event.target.files?.[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const photoData=e.target.result;
+    const profile=getOwnerProfileData();
+    saveOwnerProfile(profile.email, profile.name, profile.contact, photoData, profile.authProvider);
+    renderOwnerProfile();
+    toast('Profile photo updated.','success');
+  };
+  reader.readAsDataURL(file);
 }
 async function updateOwnerEmailConfig(newEmail){
   if(!firebaseStore || !newEmail) return;
@@ -150,7 +396,7 @@ async function updateOwnerEmailConfig(newEmail){
 }
 async function updateEmailPassword(){
   const currentPassword=(document.getElementById('profile-current-password')||{}).value?.trim();
-  const newEmail=(document.getElementById('profile-new-email')||{}).value?.trim();
+  const newEmail=(document.getElementById('profile-owner-email-input')||{}).value?.trim();
   const newPassword=(document.getElementById('profile-new-password')||{}).value?.trim();
   const confirmPassword=(document.getElementById('profile-confirm-password')||{}).value?.trim();
   if(!currentPassword){
@@ -169,36 +415,51 @@ async function updateEmailPassword(){
     toast('New password must be at least 6 characters.', 'warning');
     return;
   }
-  const user=getCurrentUser();
-  if(!user || !user.email){
-    toast('No signed in user found.', 'danger');
-    return;
-  }
-  if(!firebaseAuth){
-    toast('Firebase authentication is not configured.', 'danger');
-    return;
-  }
-  const credential=firebase.auth.EmailAuthProvider.credential(user.email, currentPassword);
-  try{
-    await user.reauthenticateWithCredential(credential);
-    if(newEmail && newEmail !== user.email){
-      await user.updateEmail(newEmail);
-      saveOwnerProfile(newEmail);
-      await updateOwnerEmailConfig(newEmail);
+  const profile=getOwnerProfileData();
+  const newEmailValue=newEmail || profile.email;
+  if(firebaseAuth && getCurrentUser()){
+    try{
+      const credential=firebase.auth.EmailAuthProvider.credential(profile.email, currentPassword);
+      await getCurrentUser().reauthenticateWithCredential(credential);
+      if(newEmailValue && newEmailValue !== profile.email){
+        if(!await canRegisterWithEmail(newEmailValue)){
+          toast('This email is not available for this account.','danger');
+          return;
+        }
+        await getCurrentUser().updateEmail(newEmailValue);
+        await updateOwnerEmailConfig(newEmailValue);
+      }
+      if(newPassword){
+        await getCurrentUser().updatePassword(newPassword);
+        setUserPassword(newPassword);
+      }
+      saveOwnerProfile(newEmailValue, profile.name, profile.contact, profile.photo, profile.authProvider);
+      document.getElementById('profile-current-password').value='';
+      document.getElementById('profile-new-password').value='';
+      document.getElementById('profile-confirm-password').value='';
+      renderOwnerProfile();
+      toast('Account settings updated successfully.', 'success');
+    }catch(err){
+      console.error(err);
+      const message = err?.message || 'Unable to update account settings. Please check your password and try again.';
+      toast(message, 'danger');
+    }
+  } else {
+    if(currentPassword !== getUserPassword()){
+      toast('Current password is incorrect.', 'danger');
+      return;
+    }
+    if(newEmailValue && newEmailValue !== profile.email){
+      saveOwnerProfile(newEmailValue, profile.name, profile.contact, profile.photo, profile.authProvider);
     }
     if(newPassword){
-      await user.updatePassword(newPassword);
+      setUserPassword(newPassword);
     }
     document.getElementById('profile-current-password').value='';
     document.getElementById('profile-new-password').value='';
     document.getElementById('profile-confirm-password').value='';
-    if(document.getElementById('profile-new-email')) document.getElementById('profile-new-email').value='';
     renderOwnerProfile();
     toast('Account settings updated successfully.', 'success');
-  }catch(err){
-    console.error(err);
-    const message = err?.message || 'Unable to update account settings. Please check your password and try again.';
-    toast(message, 'danger');
   }
 }
 
@@ -233,41 +494,876 @@ function updateAppPin(){
   document.getElementById('profile-new-pin').value='';
   toast('Unlock PIN changed successfully.', 'success');
 }
-function shouldUsePinMode(){
-  return !isExplicitLogout() && DB.get(OWNER_PROFILE_KEY) && DB.get(OWNER_PIN_KEY);
+function onLoginBackClick(){
+  switchLoginMode('welcome');
 }
-function setLoginMode(mode){
-  const full=document.getElementById('full-login-mode');
-  const pin=document.getElementById('pin-login-mode');
-  const ownerNote=document.getElementById('owner-note');
-  if(full) full.style.display = mode === 'pin' ? 'none' : 'block';
-  if(pin) pin.style.display = mode === 'pin' ? 'block' : 'none';
-  if(ownerNote){
-    if(mode === 'pin'){
-      ownerNote.textContent = 'Enter your PIN to unlock the app. Logout to sign in again.';
-    } else {
-      const configured = OWNER_EMAIL || ownerEmailConfig;
-      ownerNote.textContent = configured
-        ? 'Only the owner email can sign in to this app.'
-        : 'Register only if you are the designated owner.';
+function normalizeEmail(value){
+  return String(value||'').trim().toLowerCase();
+}
+function setWholesaleCodeSectionVisible(visible){
+  const codeSec=document.getElementById('wholesale-code-section');
+  if(!codeSec) return;
+  codeSec.style.display=visible?'block':'none';
+  codeSec.setAttribute('aria-hidden',visible?'false':'true');
+}
+function resetWholesaleLoginForm(){
+  const phoneEl=document.getElementById('wholesale-login-phone-local');
+  const emailEl=document.getElementById('wholesale-login-email');
+  const otpEl=document.getElementById('wholesale-login-otp');
+  const errEl=document.getElementById('wholesale-login-error');
+  const sendBtn=document.getElementById('wholesale-send-email-btn');
+  const verifyBtn=document.getElementById('wholesale-verify-btn');
+  if(phoneEl) phoneEl.value='';
+  if(emailEl) emailEl.value='';
+  if(otpEl) otpEl.value='';
+  if(errEl) errEl.textContent='';
+  setWholesaleCodeSectionVisible(false);
+  clearWholesaleOtpDigits();
+  if(sendBtn){ sendBtn.disabled=false; sendBtn.textContent='SEND CODE'; }
+  if(verifyBtn){ verifyBtn.disabled=false; verifyBtn.textContent='LOG IN'; }
+  wholesalePendingOtpSession=null;
+}
+function composeWholesaleE164FromNationalDigits(rawInput){
+  const d=String(rawInput||'').replace(/\D/g,'');
+  if(!d) return '';
+  const def=(WHOLESALE_DEFAULT_DIAL_CODE||'').trim();
+  if(!def.startsWith('+')) return '';
+  const cc=def.replace(/\D/g,'');
+  if(d.startsWith(cc) && d.length>cc.length) return normalizePhone('+'+d);
+  const national=d.replace(/^0+/,'');
+  if(!national) return '';
+  if(national.startsWith(cc)) return normalizePhone('+'+national);
+  return normalizePhone('+'+cc+national);
+}
+function getWholesalePhoneE164FromForm(){
+  const localEl=document.getElementById('wholesale-login-phone-local');
+  const raw=(localEl&&localEl.value!==undefined)?localEl.value:'';
+  const trimmed=String(raw).trim();
+  if(!trimmed) return '';
+  const asFull=normalizePhone(trimmed);
+  if(asFull.startsWith('+')) return asFull;
+  return composeWholesaleE164FromNationalDigits(trimmed);
+}
+function getWholesaleLoginCredentials(){
+  const email=normalizeEmail((document.getElementById('wholesale-login-email')||{}).value);
+  const phone=getWholesalePhoneE164FromForm();
+  return { phone, email };
+}
+function normalizeWholesaleRegistryEntry(entry){
+  const phone=normalizePhone(String(entry?.phone||''));
+  const email=normalizeEmail(entry?.email);
+  if(!phone||!phone.startsWith('+')||!email) return null;
+  return { phone, email };
+}
+function applyWholesaleEmailDeliveryConfig(remote){
+  if(!remote||typeof remote!=='object') return;
+  if(remote.mode) WHOLESALE_EMAIL_DELIVERY.mode=String(remote.mode);
+  if(remote.brandName) WHOLESALE_EMAIL_DELIVERY.brandName=String(remote.brandName);
+  if(remote.firebaseMailCollection) WHOLESALE_EMAIL_DELIVERY.firebaseMailCollection=String(remote.firebaseMailCollection);
+  if(remote.firebaseEnabled===true||remote.firebaseEnabled===false) WHOLESALE_EMAIL_DELIVERY.firebaseEnabled=!!remote.firebaseEnabled;
+  const ej=remote.emailjs;
+  if(ej&&typeof ej==='object'){
+    const local=WHOLESALE_EMAIL_DELIVERY.emailjs;
+    if(ej.publicKey) local.publicKey=String(ej.publicKey).trim();
+    if(ej.serviceId) local.serviceId=String(ej.serviceId).trim();
+    if(ej.templateId) local.templateId=String(ej.templateId).trim();
+    if(ej.enabled===true||ej.enabled===false) local.enabled=!!ej.enabled;
+  }
+  if(isWholesaleEmailJsReady()) WHOLESALE_EMAIL_DELIVERY.emailjs.enabled=true;
+}
+async function refreshWholesaleEmailDeliveryFromFirestore(){
+  if(!firebaseStore) return;
+  try{
+    const doc=await firebaseStore.collection(FIRESTORE_CONFIG_COLLECTION).doc(FIRESTORE_CONFIG_DOC).get();
+    if(doc.exists) applyWholesaleEmailDeliveryConfig(doc.data()?.wholesaleEmailDelivery);
+  }catch(_e){}
+}
+function isWholesaleEmailJsReady(){
+  const cfg=WHOLESALE_EMAIL_DELIVERY.emailjs||{};
+  if(cfg.enabled===false) return false;
+  return !!(cfg.publicKey&&cfg.serviceId&&cfg.templateId);
+}
+let wholesaleRegistryLastFetch=0;
+let wholesaleRegistryRefreshPromise=null;
+function buildWholesaleRegisteredUsersList(extraUsers){
+  const merged=[];
+  const seen=new Set();
+  const addEntry=(entry)=>{
+    const norm=normalizeWholesaleRegistryEntry(entry);
+    if(!norm) return;
+    const key=norm.phone+'|'+norm.email;
+    if(seen.has(key)) return;
+    seen.add(key);
+    merged.push(norm);
+  };
+  for(const u of WHOLESALE_REGISTERED_USERS||[]) addEntry(u);
+  const cached=DB.get(WHOLESALE_USERS_CACHE_KEY);
+  if(Array.isArray(cached)){
+    for(const u of cached) addEntry(u);
+  }
+  if(Array.isArray(extraUsers)){
+    for(const u of extraUsers) addEntry(u);
+  }
+  return merged;
+}
+/** Instant load from built-in list + local cache (offline-safe). */
+function loadWholesaleRegisteredUsersSync(){
+  wholesaleRegisteredUsers=buildWholesaleRegisteredUsersList();
+  return wholesaleRegisteredUsers;
+}
+/** Background refresh from Firestore when online (never blocks UI if cache exists). */
+async function refreshWholesaleRegisteredUsers(options={}){
+  const force=!!options.force;
+  const useNetwork=options.network!==false;
+  loadWholesaleRegisteredUsersSync();
+  if(!useNetwork||!firebaseStore) return wholesaleRegisteredUsers;
+  const now=Date.now();
+  if(!force&&now-wholesaleRegistryLastFetch<WHOLESALE_REGISTRY_TTL_MS){
+    return wholesaleRegisteredUsers;
+  }
+  if(wholesaleRegistryRefreshPromise&&!force){
+    return wholesaleRegistryRefreshPromise;
+  }
+  wholesaleRegistryRefreshPromise=(async()=>{
+    try{
+      const doc=await Promise.race([
+        firebaseStore.collection(FIRESTORE_CONFIG_COLLECTION).doc(FIRESTORE_CONFIG_DOC).get(),
+        new Promise((_,reject)=>setTimeout(()=>reject(new Error('wholesale-registry-timeout')),WHOLESALE_REGISTRY_FETCH_MS)),
+      ]);
+      if(doc.exists){
+        const data=doc.data()||{};
+        const users=data.wholesaleAllowedUsers;
+        if(Array.isArray(users)&&users.length){
+          wholesaleRegisteredUsers=buildWholesaleRegisteredUsersList(users);
+          DB.set(WHOLESALE_USERS_CACHE_KEY,wholesaleRegisteredUsers);
+        }
+        applyWholesaleEmailDeliveryConfig(data.wholesaleEmailDelivery);
+      }
+      wholesaleRegistryLastFetch=Date.now();
+    }catch(_e){}
+    finally{
+      wholesaleRegistryRefreshPromise=null;
+    }
+    return wholesaleRegisteredUsers;
+  })();
+  return wholesaleRegistryRefreshPromise;
+}
+function wholesalePhonesMatch(phoneA,phoneB){
+  const a=normalizePhone(phoneA||'').replace(/\D/g,'');
+  const b=normalizePhone(phoneB||'').replace(/\D/g,'');
+  if(!a||!b) return false;
+  if(a===b) return true;
+  const tail=8;
+  if(a.length>=tail&&b.length>=tail&&a.slice(-tail)===b.slice(-tail)) return true;
+  return false;
+}
+function setWholesaleAdminStatus(message,isError){
+  const el=document.getElementById('wholesale-admin-status');
+  if(!el) return;
+  el.textContent=message||'';
+  el.style.color=isError?'var(--danger)':'var(--text-secondary)';
+}
+function getWholesaleAdminPhoneE164(){
+  const raw=String((document.getElementById('wholesale-admin-phone')||{}).value||'').trim();
+  if(!raw) return '';
+  const asFull=normalizePhone(raw);
+  if(asFull.startsWith('+')) return asFull;
+  return composeWholesaleE164FromNationalDigits(raw);
+}
+function renderWholesaleAdminUserList(){
+  const listEl=document.getElementById('wholesale-admin-user-list');
+  if(!listEl) return;
+  const users=wholesaleAdminUsersCache||[];
+  if(!users.length){
+    listEl.innerHTML='<li class="wholesale-admin-user-item"><span class="wholesale-admin-user-meta">No authorized users yet. Add phone and email above.</span></li>';
+    return;
+  }
+  listEl.innerHTML=users.map((u,idx)=>`
+    <li class="wholesale-admin-user-item">
+      <span class="wholesale-admin-user-meta"><strong>${u.phone}</strong><br>${u.email}</span>
+      <button type="button" class="btn btn-secondary btn-sm" data-wholesale-remove="${idx}">Remove</button>
+    </li>
+  `).join('');
+  listEl.querySelectorAll('[data-wholesale-remove]').forEach(btn=>{
+    btn.addEventListener('click',()=>void removeWholesaleAdminUser(Number(btn.getAttribute('data-wholesale-remove'))));
+  });
+}
+async function loadWholesaleAdminUsers(){
+  if(!profileAccessUnlocked) return;
+  await refreshWholesaleRegisteredUsers();
+  wholesaleAdminUsersCache=(wholesaleRegisteredUsers||[]).slice();
+  renderWholesaleAdminUserList();
+  if(!firebaseStore){
+    setWholesaleAdminStatus('Cloud database offline — users added here will not sync until Firebase is available.',true);
+  }else{
+    setWholesaleAdminStatus(`${wholesaleAdminUsersCache.length} authorized user(s) loaded.`,false);
+  }
+}
+async function saveWholesaleAdminUsersToFirestore(users){
+  if(!firebaseStore) throw new Error('Firebase is not connected. Sign in with your owner account first.');
+  const normalized=(users||[]).map(normalizeWholesaleRegistryEntry).filter(Boolean);
+  await firebaseStore.collection(FIRESTORE_CONFIG_COLLECTION).doc(FIRESTORE_CONFIG_DOC).set({
+    wholesaleAllowedUsers:normalized,
+    wholesaleAllowedUsersUpdatedAt:firebase.firestore.FieldValue.serverTimestamp(),
+  },{ merge:true });
+  wholesaleRegisteredUsers=normalized;
+  wholesaleAdminUsersCache=normalized.slice();
+  DB.set(WHOLESALE_USERS_CACHE_KEY,normalized);
+  return normalized;
+}
+async function addWholesaleAdminUser(){
+  const email=normalizeEmail((document.getElementById('wholesale-admin-email')||{}).value);
+  const phone=getWholesaleAdminPhoneE164();
+  if(!phone){
+    setWholesaleAdminStatus('Enter a valid mobile number.',true);
+    return;
+  }
+  if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    setWholesaleAdminStatus('Enter a valid email address.',true);
+    return;
+  }
+  const entry=normalizeWholesaleRegistryEntry({ phone, email });
+  if(!entry){
+    setWholesaleAdminStatus('Could not save this user. Check phone and email format.',true);
+    return;
+  }
+  await refreshWholesaleRegisteredUsers();
+  const merged=(wholesaleRegisteredUsers||[]).slice();
+  if(merged.some(u=>u.phone===entry.phone&&u.email===entry.email)){
+    setWholesaleAdminStatus('This phone and email pair is already authorized.',true);
+    return;
+  }
+  merged.push(entry);
+  try{
+    await saveWholesaleAdminUsersToFirestore(merged);
+    renderWholesaleAdminUserList();
+    const phoneEl=document.getElementById('wholesale-admin-phone');
+    const emailEl=document.getElementById('wholesale-admin-email');
+    if(phoneEl) phoneEl.value='';
+    if(emailEl) emailEl.value='';
+    setWholesaleAdminStatus('User added. They can use Wholesales login immediately.',false);
+    toast('Wholesales user authorized.','success');
+  }catch(err){
+    console.error(err);
+    setWholesaleAdminStatus(err.message||'Could not save to cloud.',true);
+  }
+}
+async function removeWholesaleAdminUser(index){
+  await refreshWholesaleRegisteredUsers();
+  const merged=(wholesaleRegisteredUsers||[]).slice();
+  if(index<0||index>=merged.length) return;
+  merged.splice(index,1);
+  try{
+    await saveWholesaleAdminUsersToFirestore(merged);
+    renderWholesaleAdminUserList();
+    setWholesaleAdminStatus('User removed.',false);
+    toast('Wholesales user removed.','success');
+  }catch(err){
+    console.error(err);
+    setWholesaleAdminStatus(err.message||'Could not update cloud.',true);
+  }
+}
+function getWholesaleOtpDigitInputs(){
+  return Array.from(document.querySelectorAll('.wholesale-otp-digit'));
+}
+function syncWholesaleOtpHiddenValue(){
+  const hidden=document.getElementById('wholesale-login-otp');
+  if(!hidden) return;
+  hidden.value=getWholesaleOtpDigitInputs().map(el=>String(el.value||'').replace(/\D/g,'')).join('');
+}
+function clearWholesaleOtpDigits(){
+  getWholesaleOtpDigitInputs().forEach(el=>{ el.value=''; });
+  syncWholesaleOtpHiddenValue();
+}
+function getWholesaleOtpCodeFromInputs(){
+  syncWholesaleOtpHiddenValue();
+  return String((document.getElementById('wholesale-login-otp')||{}).value||'').trim();
+}
+function focusWholesaleOtpDigit(index){
+  const inputs=getWholesaleOtpDigitInputs();
+  const el=inputs[Math.max(0,Math.min(index,inputs.length-1))];
+  if(el){ el.focus(); el.select(); }
+}
+function initWholesaleOtpDigitInputs(){
+  const inputs=getWholesaleOtpDigitInputs();
+  inputs.forEach((input,idx)=>{
+    if(input.dataset.otpBound==='1') return;
+    input.dataset.otpBound='1';
+    input.addEventListener('input',()=>{
+      const v=String(input.value||'').replace(/\D/g,'');
+      input.value=v.slice(-1);
+      syncWholesaleOtpHiddenValue();
+      if(v&&idx<inputs.length-1) focusWholesaleOtpDigit(idx+1);
+      const code=getWholesaleOtpCodeFromInputs();
+      if(code.length===inputs.length){
+        void completeWholesaleEmailVerification();
+      }
+    });
+    input.addEventListener('keydown',e=>{
+      if(e.key==='Backspace'&&!input.value&&idx>0){
+        focusWholesaleOtpDigit(idx-1);
+      }
+      if(e.key==='Enter'){
+        e.preventDefault();
+        void completeWholesaleEmailVerification();
+      }
+    });
+    input.addEventListener('paste',e=>{
+      e.preventDefault();
+      const pasted=String((e.clipboardData||window.clipboardData)?.getData('text')||'').replace(/\D/g,'').slice(0,6);
+      if(!pasted) return;
+      for(let i=0;i<inputs.length;i++) inputs[i].value=pasted[i]||'';
+      syncWholesaleOtpHiddenValue();
+      focusWholesaleOtpDigit(Math.min(pasted.length,inputs.length-1));
+      const code=getWholesaleOtpCodeFromInputs();
+      if(code.length===inputs.length){
+        void completeWholesaleEmailVerification();
+      }
+    });
+  });
+}
+function hasWholesaleRegistryConfigured(){
+  return (wholesaleRegisteredUsers||[]).length>0;
+}
+function findWholesaleRegisteredUser(phone,email){
+  const e=normalizeEmail(email);
+  const p=normalizePhone(String(phone||''));
+  if(!e && !p) return null;
+  return (wholesaleRegisteredUsers||[]).find(u=>{
+    const matchEmail = e && u.email===e;
+    const matchPhone = p && wholesalePhonesMatch(u.phone,p);
+    return matchEmail || matchPhone;
+  })||null;
+}
+function generateWholesaleOtpCode(){
+  return String(Math.floor(100000+Math.random()*900000));
+}
+function buildWholesaleVerificationEmailHtml(code){
+  const brand=WHOLESALE_EMAIL_DELIVERY.brandName||'Good Luck Rahman Enterprise';
+  const safeCode=String(code).replace(/[^\d]/g,'');
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:24px;background:#0f1419;font-family:Segoe UI,Arial,sans-serif;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:520px;margin:0 auto;background:#1a2332;border-radius:12px;border:1px solid rgba(245,200,66,0.35);">
+<tr><td style="padding:28px 32px 12px;text-align:center;">
+<div style="font-size:11px;letter-spacing:0.25em;color:#f5c842;text-transform:uppercase;">Wholesales Access</div>
+<h1 style="margin:8px 0 0;font-size:22px;color:#ffffff;font-weight:600;">${brand}</h1>
+</td></tr>
+<tr><td style="padding:8px 32px 20px;text-align:center;color:#adb5bd;font-size:14px;line-height:1.5;">
+Use this one-time verification code to open the Wholesales section. It expires in <strong style="color:#fff;">10 minutes</strong>.
+</td></tr>
+<tr><td style="padding:0 32px 28px;text-align:center;">
+<div style="display:inline-block;padding:16px 28px;background:#0f1419;border-radius:10px;border:1px solid rgba(116,192,252,0.4);">
+<span style="font-size:32px;font-weight:700;letter-spacing:10px;color:#74c0fc;font-family:Consolas,monospace;">${safeCode}</span>
+</div>
+</td></tr>
+<tr><td style="padding:0 32px 28px;text-align:center;color:#868e96;font-size:12px;line-height:1.5;">
+If you did not request this code, you can ignore this email. Only registered phone numbers or email addresses can sign in.
+</td></tr>
+<tr><td style="padding:16px 32px 24px;text-align:center;border-top:1px solid rgba(255,255,255,0.08);color:#495057;font-size:11px;">
+&copy; ${new Date().getFullYear()} ${brand}
+</td></tr>
+</table></body></html>`;
+}
+function formatWholesaleOtpExpiryTime(expiresAtMs){
+  try{
+    return new Date(expiresAtMs).toLocaleString(undefined,{ dateStyle:'medium', timeStyle:'short' });
+  }catch(_e){
+    return new Date(expiresAtMs).toLocaleString();
+  }
+}
+function getWholesaleOtpEmailContent(code){
+  const brand=WHOLESALE_EMAIL_DELIVERY.brandName||'Good Luck Rahman Enterprise';
+  const expiresAt=Date.now()+WHOLESALE_OTP_TTL_MS;
+  const expiryLabel=formatWholesaleOtpExpiryTime(expiresAt);
+  return {
+    subject:`${brand} — Wholesales login code`,
+    text:`Your Wholesales login code is ${code}. It expires at ${expiryLabel}. If you did not request this, ignore this email.`,
+    html:buildWholesaleVerificationEmailHtml(code),
+    expiresAt,
+    expiryLabel,
+  };
+}
+function getWholesaleEmailJsTemplateParams(toEmail,code){
+  const brand=WHOLESALE_EMAIL_DELIVERY.brandName||'Good Luck Rahman Enterprise';
+  const { subject, text, html, expiresAt, expiryLabel }=getWholesaleOtpEmailContent(code);
+  const websiteLink=String(WHOLESALE_EMAIL_DELIVERY.websiteLink||'').trim();
+  return {
+    email:toEmail,
+    to_email:toEmail,
+    user_email:toEmail,
+    subject,
+    passcode:code,
+    time:expiryLabel,
+    company_name:brand,
+    website_link:websiteLink||'#',
+    message:text,
+    html_message:html,
+  };
+}
+async function sendWholesaleOtpViaFirebaseTriggerEmail(toEmail,code){
+  if(!firebaseStore) throw new Error('Firebase Firestore is not available.');
+  const col=WHOLESALE_EMAIL_DELIVERY.firebaseMailCollection||'mail';
+  const { subject, text, html }=getWholesaleOtpEmailContent(code);
+  await firebaseStore.collection(col).add({
+    to:[toEmail],
+    message:{ subject, text, html },
+  });
+}
+async function sendWholesaleOtpViaEmailJS(toEmail,code){
+  if(!isWholesaleEmailJsReady()){
+    throw new Error('EmailJS is not configured.');
+  }
+  const cfg=WHOLESALE_EMAIL_DELIVERY.emailjs||{};
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),WHOLESALE_EMAIL_FETCH_MS):null;
+  let res;
+  try{
+    res=await fetch('https://api.emailjs.com/api/v1.0/email/send',{
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      signal:controller?.signal,
+      body:JSON.stringify({
+        service_id:cfg.serviceId,
+        template_id:cfg.templateId,
+        user_id:cfg.publicKey,
+        template_params:getWholesaleEmailJsTemplateParams(toEmail,code),
+      }),
+    });
+  }finally{
+    if(timer) clearTimeout(timer);
+  }
+  if(!res.ok){
+    const detail=await res.text().catch(()=>'');
+    throw new Error(detail||'EmailJS delivery failed');
+  }
+}
+async function sendWholesaleOtpEmail(toEmail,code){
+  const mode=WHOLESALE_EMAIL_DELIVERY.mode||'auto';
+  const tryFirebase=mode==='auto'||mode==='firebase';
+  const tryEmailJs=mode==='auto'||mode==='emailjs';
+  const failures=[];
+  if(tryEmailJs&&isWholesaleEmailJsReady()){
+    try{
+      await sendWholesaleOtpViaEmailJS(toEmail,code);
+      return 'emailjs';
+    }catch(err){
+      console.warn('EmailJS failed',err);
+      failures.push(err);
     }
   }
+  const firebaseAllowed=mode==='firebase'||WHOLESALE_EMAIL_DELIVERY.firebaseEnabled===true;
+  if(tryFirebase&&firebaseAllowed&&isFirebaseConfigured()&&firebaseStore){
+    try{
+      await sendWholesaleOtpViaFirebaseTriggerEmail(toEmail,code);
+      return 'firebase';
+    }catch(err){
+      console.warn('Firebase Trigger Email failed',err);
+      failures.push(err);
+    }
+  }
+  if(mode==='dev'||mode==='auto'){
+    console.info('[Wholesale dev OTP]',toEmail,code);
+    toast('Development mode: your verification code is '+code,'warning');
+    return 'dev';
+  }
+  throw failures[0]||new Error('No email provider configured.');
+}
+async function beginWholesaleEmailVerification(){
+  const errEl=document.getElementById('wholesale-login-error');
+  const sendBtn=document.getElementById('wholesale-send-email-btn');
+  if(errEl) errEl.textContent='';
+  loadWholesaleRegisteredUsersSync();
+  void refreshWholesaleRegisteredUsers({ network:navigator.onLine!==false });
+  if(!hasWholesaleRegistryConfigured()){
+    if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_ACTIVATED;
+    console.warn('Wholesale registry: add users in Profile → Wholesales authorized users.');
+    return;
+  }
+  const { phone, email }=getWholesaleLoginCredentials();
+  if(!phone){
+    if(errEl) errEl.textContent='Enter your registered mobile number.';
+    return;
+  }
+  if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    if(errEl) errEl.textContent='Enter your registered email address.';
+    return;
+  }
+  if(!findWholesaleRegisteredUser(phone,email)){
+    if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_REGISTERED;
+    return;
+  }
+  if(wholesaleEmailSendInFlight) return;
+  const now=Date.now();
+  if(wholesalePendingOtpSession
+    &&wholesalePendingOtpSession.phone===phone
+    &&wholesalePendingOtpSession.email===email
+    &&now-wholesalePendingOtpSession.sentAt<WHOLESALE_OTP_RESEND_MS){
+    if(errEl) errEl.textContent='Please wait a moment before requesting another code.';
+    return;
+  }
+  wholesaleEmailSendInFlight=true;
+  if(sendBtn){
+    sendBtn.disabled=true;
+    sendBtn.textContent='Sending…';
+  }
+  try{
+    const code=generateWholesaleOtpCode();
+    const provider=await sendWholesaleOtpEmail(email,code);
+    wholesalePendingOtpSession={
+      phone,
+      email,
+      code,
+      sentAt:Date.now(),
+      expiresAt:Date.now()+WHOLESALE_OTP_TTL_MS,
+    };
+    setWholesaleCodeSectionVisible(true);
+    clearWholesaleOtpDigits();
+    focusWholesaleOtpDigit(0);
+    const sentMsg=provider==='dev'
+      ? (navigator.onLine===false
+        ? 'Offline: your code is in the yellow toast above.'
+        : 'Email could not be sent — your code is in the yellow toast above.')
+      : 'Verification code sent to your registered email.';
+    toast(sentMsg,provider==='dev'?'warning':'success');
+  }catch(err){
+    console.error(err);
+    if(errEl) errEl.textContent='We could not send the email. Set up free EmailJS (emailjs.com) or Firebase Trigger Email — see WHOLESALE_EMAIL_DELIVERY in script.js.';
+  }finally{
+    wholesaleEmailSendInFlight=false;
+    if(sendBtn){
+      sendBtn.disabled=false;
+      sendBtn.textContent=wholesalePendingOtpSession?'RESEND CODE':'SEND CODE';
+    }
+  }
+}
+async function completeWholesaleEmailVerification(){
+  const errEl=document.getElementById('wholesale-login-error');
+  const verifyBtn=document.getElementById('wholesale-verify-btn');
+  if(errEl) errEl.textContent='';
+  loadWholesaleRegisteredUsersSync();
+  const session=wholesalePendingOtpSession;
+  if(!session){
+    if(errEl) errEl.textContent='Request a verification code first.';
+    return;
+  }
+  const code=getWholesaleOtpCodeFromInputs();
+  if(!/^\d{6}$/.test(code)){
+    if(errEl) errEl.textContent='Enter the 6-digit code from your email.';
+    return;
+  }
+  const { phone, email }=getWholesaleLoginCredentials();
+  if(phone!==session.phone||email!==session.email){
+    if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_REGISTERED;
+    return;
+  }
+  if(!findWholesaleRegisteredUser(phone,email)){
+    if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_REGISTERED;
+    return;
+  }
+  if(Date.now()>session.expiresAt){
+    wholesalePendingOtpSession=null;
+    if(errEl) errEl.textContent='Code expired. Request a new verification code.';
+    return;
+  }
+  if(code!==session.code){
+    if(errEl) errEl.textContent='Incorrect verification code.';
+    return;
+  }
+  if(verifyBtn){
+    verifyBtn.disabled=true;
+    verifyBtn.textContent='Logging in…';
+  }
+  try{
+    DB.set(WHOLESALE_ACCESS_KEY,{ phone, email, verifiedAt:new Date().toISOString() });
+    setOwnerPhone(phone);
+    wholesalePendingOtpSession=null;
+    document.getElementById('login-error').textContent='';
+    openWholesaleFromWelcome();
+    toast('Wholesales access verified.','success');
+  }finally{
+    if(verifyBtn){
+      verifyBtn.disabled=false;
+      verifyBtn.textContent='LOG IN';
+    }
+  }
+}
+function shouldUsePinMode(){
+  if(isExplicitLogout()) return false;
+  const p=getPrimaryAccountEmail();
+  if(!p) return false;
+  return !!(DB.getScoped(OWNER_PROFILE_KEY, p) && DB.getScoped(OWNER_PIN_KEY, p));
+}
+function setLoginMode(mode){
+  if(lastLoginOverlayMode==='wholesalePhone' && mode!=='wholesalePhone'){
+    wholesalePendingOtpSession=null;
+  }
+  lastLoginOverlayMode=mode;
+  const welcome=document.getElementById('login-welcome-mode');
+  const login=document.getElementById('login-mode');
+  const adminLogin=document.getElementById('login-admin-mode');
+  const register=document.getElementById('register-mode');
+  const pin=document.getElementById('pin-login-mode');
+  const forgotPassword=document.getElementById('forgot-password-mode');
+  const forgotPin=document.getElementById('forgot-pin-mode');
+  const wholesalePhoneMode=document.getElementById('login-wholesale-phone-mode');
+  const backButton=document.getElementById('login-back-button');
+  if(welcome) welcome.style.display = mode === 'welcome' ? 'block' : 'none';
+  if(login) login.style.display = mode === 'login' ? 'block' : 'none';
+  if(adminLogin) adminLogin.style.display = mode === 'adminLogin' ? 'block' : 'none';
+  if(register) register.style.display = mode === 'register' ? 'block' : 'none';
+  if(pin) pin.style.display = mode === 'pin' ? 'block' : 'none';
+  if(forgotPassword) forgotPassword.style.display = mode === 'forgotPassword' ? 'block' : 'none';
+  if(forgotPin) forgotPin.style.display = mode === 'forgotPin' ? 'block' : 'none';
+  if(wholesalePhoneMode) wholesalePhoneMode.style.display = mode === 'wholesalePhone' ? 'block' : 'none';
+  if(backButton) backButton.style.display = mode === 'login' || mode === 'register' || mode === 'adminLogin' ? 'inline-flex' : 'none';
+  const otpSection=document.getElementById('login-otp-section');
+  if(otpSection) otpSection.style.display = 'none';
+  const codeHint=document.getElementById('login-code-hint');
+  if(codeHint) codeHint.style.display='none';
   const errorEl=document.getElementById('login-error');
   if(errorEl) errorEl.textContent='';
+  const adminErrorEl=document.getElementById('admin-login-error');
+  if(adminErrorEl) { adminErrorEl.textContent=''; adminErrorEl.style.display='none'; }
+  const authEmailInput=document.getElementById('auth-email');
+  const authPasswordInput=document.getElementById('auth-password');
+  if(authEmailInput) authEmailInput.value='';
+  if(authPasswordInput) authPasswordInput.value='';
+  const adminEmailInput=document.getElementById('admin-auth-email');
+  const adminPasswordInput=document.getElementById('admin-auth-password');
+  if(adminEmailInput) adminEmailInput.value='';
+  if(adminPasswordInput) adminPasswordInput.value='';
+  resetAuthButtons();
+  if(mode !== 'forgotPassword'){
+    resetForgotPasswordForm();
+  }
+  if(mode==='wholesalePhone'){
+    resetWholesaleLoginForm();
+    loadWholesaleRegisteredUsersSync();
+    void refreshWholesaleRegisteredUsers({ network:navigator.onLine!==false });
+  }
+}
+function resetAuthButtons(){
+  const loginButton=document.getElementById('login-submit-btn');
+  const registerButton=document.getElementById('register-submit-btn');
+  const adminLoginButton=document.getElementById('admin-login-submit-btn');
+  if(loginButton){ loginButton.disabled=false; loginButton.textContent='🔓 LOGIN'; }
+  if(registerButton){ registerButton.disabled=false; registerButton.textContent='📝 CREATE ACCOUNT'; }
+  if(adminLoginButton){ adminLoginButton.disabled=false; adminLoginButton.textContent='🔒 ADMIN LOGIN'; }
 }
 function initLoginScreen(){
+  resetAuthButtons();
   if(shouldUsePinMode()){
     setLoginMode('pin');
   } else {
-    setLoginMode('full');
+    setLoginMode('welcome');
   }
 }
-function switchToFullLogin(){
+function switchLoginMode(mode){
+  resetAuthButtons();
   setExplicitLogout(true);
-  firebaseSignOut().catch(()=>{});
-  setLoginMode('full');
-  const pinField=document.getElementById('auth-pin');
-  if(pinField) pinField.value='';
+  if(mode === 'login' || mode === 'register'){
+    firebaseSignOut().catch(()=>{});
+    setCurrentAccount('');
+  }
+  if(mode === 'register'){
+    pendingRegistrationPhoto = null;
+    ['auth-register-ownername','auth-register-phone'].forEach(id=>{
+      const el=document.getElementById(id);
+      if(el) el.value='';
+    });
+    const registerPreview=document.getElementById('register-photo-preview');
+    const registerPlaceholder=document.querySelector('#register-photo-preview-wrapper .photo-placeholder');
+    if(registerPreview){ registerPreview.src=''; registerPreview.style.display='none'; }
+    if(registerPlaceholder){ registerPlaceholder.style.display='block'; }
+    const codeHint=document.getElementById('login-code-hint');
+    if(codeHint) codeHint.style.display='none';
+  }
+  setLoginMode(mode);
+}
+function isFirebaseConfigured(){
+  return !!(firebaseAuth && FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.authDomain && FIREBASE_CONFIG.projectId);
+}
+function getPrimaryAccountEmail(){
+  const session=normalizeAccountId(getCurrentAccount());
+  if(session) return session;
+  return normalizeAccountId((DB.get(LAST_PROFILE_EMAIL_KEY)||'').toString());
+}
+function getRegisteredEmail(){
+  const primary=getPrimaryAccountEmail();
+  const profile=primary?getOwnerProfileData(primary):getOwnerProfileData();
+  return ((profile.email||primary||'').toString()).toLowerCase().trim();
+}
+function showForgotPasswordRequestForm(){
+  const requestForm=document.getElementById('forgot-password-request-form');
+  const sentPanel=document.getElementById('forgot-password-sent');
+  const codeRow=document.getElementById('forgot-password-code-row');
+  const continueButton=document.getElementById('forgot-password-continue-btn');
+  const note=document.getElementById('forgot-password-note');
+  if(requestForm) requestForm.style.display='block';
+  if(sentPanel) sentPanel.style.display='none';
+  if(codeRow) codeRow.style.display='none';
+  if(continueButton) continueButton.style.display='none';
+  if(note) note.textContent='Enter your registered email address to receive reset instructions.';
+}
+function showForgotPasswordSentState(message, allowContinue, localCode){
+  const requestForm=document.getElementById('forgot-password-request-form');
+  const sentPanel=document.getElementById('forgot-password-sent');
+  const sentMessage=document.querySelector('#forgot-password-sent .sent-message');
+  const sentCode=document.getElementById('forgot-password-sent-code');
+  const continueButton=document.getElementById('forgot-password-continue-btn');
+  const codeRow=document.getElementById('forgot-password-code-row');
+  const note=document.getElementById('forgot-password-note');
+  if(requestForm) requestForm.style.display='none';
+  if(sentPanel) sentPanel.style.display='block';
+  if(sentMessage) sentMessage.textContent = message || 'Reset code has been sent to your email.';
+  if(sentCode){
+    if(localCode){
+      sentCode.style.display='block';
+      sentCode.textContent = 'Local recovery code: ' + localCode + ' (use this code in the next step).';
+    } else {
+      sentCode.style.display='none';
+      sentCode.textContent = '';
+    }
+  }
+  if(continueButton) continueButton.style.display = allowContinue ? 'inline-flex' : 'none';
+  if(codeRow) codeRow.style.display='none';
+  if(note) note.textContent = '';
+}
+function showForgotPasswordCodeEntry(){
+  const sentPanel=document.getElementById('forgot-password-sent');
+  const codeRow=document.getElementById('forgot-password-code-row');
+  if(sentPanel) sentPanel.style.display='none';
+  if(codeRow) codeRow.style.display='block';
+}
+function resetForgotPasswordForm(){
+  showForgotPasswordRequestForm();
+  const fields=['forgot-email','forgot-password-code','forgot-password-new'];
+  fields.forEach(id=>{const el=document.getElementById(id); if(el) el.value='';});
+}
+async function doPasswordResetRequest(){
+  const email=(document.getElementById('forgot-email')||{}).value?.trim();
+  const errorEl=document.getElementById('login-error');
+  if(!email){
+    if(errorEl) errorEl.textContent='Enter your registered email to reset your password.';
+    return;
+  }
+  if(email.toLowerCase() !== getRegisteredEmail()){
+    if(errorEl) errorEl.textContent='This email does not match the registered account.';
+    return;
+  }
+  if(errorEl) errorEl.textContent='';
+  if(isFirebaseConfigured()){
+    try{
+      const actionCodeSettings = {
+        url: FIREBASE_RESET_URL,
+        handleCodeInApp: false,
+      };
+      await firebaseAuth.sendPasswordResetEmail(email, actionCodeSettings);
+      showForgotPasswordSentState('Password reset instructions have been sent to your registered email.', false);
+      return;
+    }catch(err){
+      const code = err?.code || '';
+      if(code === 'auth/user-not-found' && email.toLowerCase() === getRegisteredEmail()){
+        const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+        DB.set('glr_password_reset_code', resetCode);
+        DB.set('glr_password_reset_email', email.toLowerCase());
+        showForgotPasswordSentState('No Firebase account was found for this email. The app is using a local recovery code instead.', true, resetCode);
+        return;
+      }
+      let message = 'Unable to send reset email. Please try again later.';
+      if(code === 'auth/invalid-email'){
+        message = 'Please enter a valid email address.';
+      } else if(code === 'auth/network-request-failed' || /network|offline|timeout/i.test(err?.message||'')){
+        message = 'Unable to connect to the internet. Check your connection and try again.';
+      }
+      if(errorEl){
+        errorEl.textContent = message;
+      }
+      return;
+    }
+  }
+  const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+  DB.set('glr_password_reset_code', resetCode);
+  DB.set('glr_password_reset_email', email.toLowerCase());
+  showForgotPasswordSentState('A local recovery code has been generated. Click continue to enter it and reset your password.', true, resetCode);
+}
+async function doCompletePasswordReset(){
+  const email=(document.getElementById('forgot-email')||{}).value?.trim();
+  const code=(document.getElementById('forgot-password-code')||{}).value?.trim();
+  const newPassword=(document.getElementById('forgot-password-new')||{}).value?.trim();
+  const errorEl=document.getElementById('login-error');
+  if(!email||!code||!newPassword){
+    if(errorEl) errorEl.textContent='Please enter email, recovery code and a new password.';
+    return;
+  }
+  const storedEmail=(DB.get('glr_password_reset_email')||'').toLowerCase().trim();
+  const storedCode=(DB.get('glr_password_reset_code')||'').toString();
+  if(email.toLowerCase() !== storedEmail){
+    if(errorEl) errorEl.textContent='Email does not match the recovery request.';
+    return;
+  }
+  if(code !== storedCode){
+    if(errorEl) errorEl.textContent='Recovery code is incorrect.';
+    return;
+  }
+  if(newPassword.length < 6){
+    if(errorEl) errorEl.textContent='Password must be at least 6 characters.';
+    return;
+  }
+  setUserPassword(newPassword, email.toLowerCase());
+  DB.delete('glr_password_reset_code');
+  DB.delete('glr_password_reset_email');
+  if(errorEl) errorEl.textContent='';
+  toast('Password reset successfully. You can now log in.', 'success');
+  switchLoginMode('login');
+}
+async function doResetPin(){
+  const email=(document.getElementById('forgot-pin-email')||{}).value?.trim();
+  const password=(document.getElementById('forgot-pin-password')||{}).value?.trim();
+  const newPin=(document.getElementById('forgot-pin-new')||{}).value?.trim();
+  const errorEl=document.getElementById('login-error');
+  if(!email||!password||!newPin){
+    if(errorEl) errorEl.textContent='Enter email, password and a new PIN.';
+    return;
+  }
+  if(email.toLowerCase() !== getRegisteredEmail()){
+    if(errorEl) errorEl.textContent='Email does not match the registered account.';
+    return;
+  }
+  if(newPin.length < 4){
+    if(errorEl) errorEl.textContent='PIN must be at least 4 digits.';
+    return;
+  }
+  if(isFirebaseConfigured()){
+    try{
+      justLoggedIn=true;
+      await firebaseSignIn(email,password);
+      setOwnerPin(newPin);
+      toast('PIN reset successfully. You are now signed in.', 'success');
+      return;
+    }catch(err){
+      let message = 'Unable to verify password. Please try again.';
+      const code = err?.code || '';
+      if(code === 'auth/wrong-password'){
+        message = 'Password is incorrect. Please try again.';
+      } else if(code === 'auth/invalid-email'){
+        message = 'Please enter a valid email address.';
+      } else if(code === 'auth/user-not-found'){
+        message = 'No account found with that email. Please register first.';
+      } else if(code === 'auth/network-request-failed' || /network|offline|timeout/i.test(err?.message||'')){
+        message = 'Unable to verify password because of a network issue. Check your connection and try again.';
+      }
+      if(errorEl) errorEl.textContent = message;
+      return;
+    }
+  }
+  if(!localAuthenticate(email,password)){
+    if(errorEl) errorEl.textContent='Email or password is incorrect.';
+    return;
+  }
+  setOwnerPin(newPin);
+  if(errorEl) errorEl.textContent='';
+  toast('PIN has been reset successfully. Use your new PIN to unlock.', 'success');
+  setLoginMode('pin');
 }
 function doUnlock(){
   const pin=(document.getElementById('auth-pin')||{}).value?.trim();
@@ -278,28 +1374,43 @@ function doUnlock(){
   }
   if(pin === getOwnerPin()){
     if(errorEl) errorEl.textContent='';
+    const primary=getPrimaryAccountEmail();
+    if(primary) setCurrentAccount(primary);
     document.getElementById('login-overlay').style.display='none';
     document.getElementById('app').style.display='flex';
     setExplicitLogout(false);
     initApp();
     return;
   }
-  if(errorEl) errorEl.textContent='Invalid PIN. Please try again.';
+  if(errorEl) errorEl.textContent='Incorrect PIN. Please try again.';
 }
 
 let firebaseApp=null;
 let firebaseAuth=null;
 let firebaseStore=null;
+let firebaseStorage=null;
 let authUser=null;
 let ownerEmailConfig=null;
+let adminLoginVerified=false;
+const ADMIN_EMAIL='abduldeenkamara06@gmail.com';
+const ADMIN_PASSWORD='10737';
 const AUTO_SYNC_INTERVAL_MS=30000;
+let syncRetryCountOnline=0;  // Track retry attempts
 
 function initFirebase(){
   if(firebaseApp||!window.firebase||!firebase.initializeApp) return;
   if(!FIREBASE_CONFIG.apiKey||!FIREBASE_CONFIG.authDomain||!FIREBASE_CONFIG.projectId) return;
   firebaseApp=firebase.initializeApp(FIREBASE_CONFIG);
   firebaseAuth=firebase.auth();
+  try{
+    firebaseAuth.useDeviceLanguage();
+    void firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+  }catch(_e){}
   firebaseStore=firebase.firestore();
+  firebaseStorage=firebase.storage();
+  loadWholesaleRegisteredUsersSync();
+  void refreshWholesaleEmailDeliveryFromFirestore();
+  void refreshWholesaleRegisteredUsers({ network:true });
   firebaseAuth.onAuthStateChanged(async (user)=>{
     authUser=user;
     if(user){
@@ -309,16 +1420,9 @@ function initFirebase(){
 }
 
 function updateAuthActions(){
-  const registerBtn=document.querySelector('.btn-secondary');
   const ownerNote=document.getElementById('owner-note');
-  const configured=OWNER_EMAIL || ownerEmailConfig;
-  if(registerBtn){
-    registerBtn.style.display = configured ? 'none' : 'inline-flex';
-  }
   if(ownerNote){
-    ownerNote.textContent = configured
-      ? 'Only the owner email can sign in to this app.'
-      : 'Register only if you are the designated owner.';
+    ownerNote.textContent = 'Enter your email and password to continue.';
   }
 }
 
@@ -366,17 +1470,11 @@ async function ensureOwnerConfig(email){
 }
 
 async function canRegisterWithEmail(email){
-  const normalized=email.toLowerCase().trim();
-  if(!normalized) return false;
-  const owner=await resolveOwnerEmailConfig();
-  return !owner || owner===normalized;
+  return true;
 }
 
 async function canSignInWithEmail(email){
-  const normalized=email.toLowerCase().trim();
-  if(!normalized) return false;
-  const owner=await resolveOwnerEmailConfig();
-  return !owner || owner===normalized;
+  return true;
 }
 
 function getCurrentUser(){
@@ -385,41 +1483,51 @@ function getCurrentUser(){
 }
 
 async function handleUserSignedIn(user){
+  
+  const runFirestoreRestore=async()=>{
+    try{
+      await loadUserDataFromFirestore();
+    }catch(e){
+      console.error('Firestore load failed',e);
+      const overlay=document.getElementById('login-overlay');
+      const el=document.getElementById('login-error');
+      if(el && overlay && overlay.style.display!=='none'){
+        el.textContent=e.message||'Unable to restore cloud data.';
+      }
+      toast('Signed in, but cloud restore failed.','warning');
+    }
+  };
   try{
     const normalized=user?.email?.toLowerCase().trim();
-    const configured=await resolveOwnerEmailConfig();
-    if(configured && normalized!==configured){
-      await firebaseSignOut();
-      const el=document.getElementById('login-error');
-      if(el) el.textContent='This app is configured for a different owner email.';
-      return;
-    }
-    if(!configured && normalized){
-      await ensureOwnerConfig(normalized);
-    }
     if(normalized){
-      saveOwnerProfile(normalized);
-      if(!DB.get(OWNER_PIN_KEY)) setOwnerPin('9252');
+      const profile=getOwnerProfileData(normalized);
+      const fullName=user.displayName || profile.name || '';
+      const photo=user.photoURL || profile.photo || '';
+      saveOwnerProfile(normalized, fullName, profile.contact, photo, 'email');
+      if(photo) DB.setScoped('owner_photo', photo, normalized);
+      if(!DB.getScoped(OWNER_PIN_KEY, normalized)) setOwnerPin('9252', normalized);
     }
     setExplicitLogout(false);
-    await loadUserDataFromFirestore();
     document.getElementById('login-error').textContent='';
     if(!justLoggedIn && shouldUsePinMode()){
+      justLoggedIn=false;
       setLoginMode('pin');
       document.getElementById('login-overlay').style.display='flex';
       document.getElementById('app').style.display='none';
-      justLoggedIn=false;
+      void runFirestoreRestore();
       return;
     }
     justLoggedIn=false;
     document.getElementById('login-overlay').style.display='none';
     document.getElementById('app').style.display='flex';
     initApp();
+    showPanel('dashboard');
+    void runFirestoreRestore();
   }catch(e){
-    console.error('Firestore load failed',e);
+    console.error(e);
     const el=document.getElementById('login-error');
-    if(el) el.textContent=e.message||'Unable to sign in with this owner account.';
-    toast('Signed in, but cloud restore failed.','warning');
+    if(el) el.textContent=e.message||'Unable to complete sign-in.';
+    toast('Sign-in failed.','warning');
   }
 }
 
@@ -433,6 +1541,7 @@ async function saveUserDataToFirestore(){
     sales:DB.getSales(),
     inventory:DB.getInventory(),
     audit:DB.getAudit(),
+    profile:getOwnerProfileData(),
   },{merge:true});
 }
 
@@ -442,10 +1551,17 @@ async function loadUserDataFromFirestore(){
   const doc=await firebaseStore.collection('users').doc(user.uid).get();
   if(!doc.exists) return;
   const data=doc.data();
-  if(data.sales) DB.setSales(data.sales);
-  if(data.inventory) DB.setInventory(data.inventory);
-  if(data.audit) DB.setAudit(data.audit);
+  const queue=DB.getSyncQueue();
+  const pendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+  const pendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+  const pendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
+  if(data.sales) DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, pendingSaleIds));
+  if(data.inventory) DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, pendingInventoryIds));
+  if(data.audit) DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, pendingAuditIds));
+  const hasPendingProfileUpdate = queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo');
+  if(data.profile && !hasPendingProfileUpdate) DB.setScoped(OWNER_PROFILE_KEY, data.profile);
   refreshSyncBadge();
+  renderOwnerProfile();
 }
 
 async function firebaseSignIn(email,password){
@@ -494,6 +1610,34 @@ function queueSync(op,payload){
     if(syncDebounceTimer)clearTimeout(syncDebounceTimer);
     syncDebounceTimer=setTimeout(()=>syncToCloud(true),800);
   }
+}
+
+function getPendingIdsForOpTypes(types){
+  const ids=new Set();
+  const queue=DB.getSyncQueue();
+  for(const item of queue){
+    if(!types.includes(item.op) || !item.payload) continue;
+    const id=item.payload.auditId || item.payload.id;
+    if(id) ids.add(id);
+  }
+  return ids;
+}
+
+function mergeRemoteRecords(localRecords, remoteRecords, pendingIds){
+  const merged=[];
+  const remoteMap=new Map((remoteRecords||[]).map(item=>[item?.id, item]));
+  for(const record of localRecords||[]){
+    if(record && record.id && pendingIds.has(record.id)){
+      merged.push(record);
+      remoteMap.delete(record.id);
+    }
+  }
+  for(const record of remoteRecords||[]){
+    if(!record || !record.id) continue;
+    if(pendingIds.has(record.id)) continue;
+    merged.push(record);
+  }
+  return merged;
 }
 
 function refreshSyncBadge(){
@@ -563,58 +1707,151 @@ async function doLogin(){
   const email=(document.getElementById('auth-email')||{}).value?.trim();
   const password=(document.getElementById('auth-password')||{}).value?.trim();
   const el=document.getElementById('login-error');
+  const loginButton=document.getElementById('login-submit-btn');
+  const originalText = loginButton?.textContent || 'LOG IN';
   if(!email||!password){
     el.textContent='Please enter email and password.';
     return;
   }
+  if(loginButton){
+    loginButton.disabled=true;
+    loginButton.textContent='Logging in...';
+  }
+  await new Promise(requestAnimationFrame);
+  const profile=getOwnerProfileData();
+  const isRegisteredEmail = profile.email.toLowerCase()===email.toLowerCase();
   if(firebaseAuth){
+    if(!navigator.onLine){
+      el.textContent = 'Internet is required to log in with email and password. Use PIN unlock when offline.';
+      if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
+      return;
+    }
     try{
-      if(!await canSignInWithEmail(email)){
-        el.textContent='This app is configured for a different owner email.';
-        return;
-      }
       justLoggedIn=true;
       await firebaseSignIn(email,password);
+      setCurrentAccount(email);
       return;
     }catch(err){
       console.error(err);
-      el.textContent=err.message||'Login failed. Please try again.';
+      let message = 'Login failed. Please check your email and password.';
+      if(err?.code === 'auth/wrong-password'){
+        message = 'Incorrect password. Please try again.';
+      } else if(err?.code === 'auth/invalid-email'){
+        message = 'Please enter a valid email address.';
+      } else if(err?.code === 'auth/user-not-found' || err?.code === 'auth/invalid-login-credentials'){
+        message = isRegisteredEmail ? 'Account deleted or incorrect password. Please register a new account or verify your credentials.' : 'No account found with that email. Please register or check your email.';
+      } else if(err?.code === 'auth/network-request-failed' || /network|offline|timeout/i.test(err?.message||'')){
+        message = 'Unable to connect to the internet. Check your connection and try again.';
+      }
+      el.textContent = message;
+      if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
       return;
     }
   }
-  if(password==='1234'){
+  if(localAuthenticate(email,password)){
     justLoggedIn=true;
+    setCurrentAccount(email);
     setExplicitLogout(false);
-    if(email) saveOwnerProfile(email);
-    if(!DB.get(OWNER_PIN_KEY)) setOwnerPin('1234');
     document.getElementById('login-overlay').style.display='none';
     document.getElementById('app').style.display='flex';
     initApp();
     return;
   }
-  el.textContent='Incorrect code. Please try again.';
+  el.textContent = isRegisteredEmail ? 'Incorrect password. Please try again.' : 'Incorrect email or password. Please try again.';
+  if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
+}
+
+async function doAdminLogin(){
+  const email=(document.getElementById('admin-auth-email')||{}).value?.trim();
+  const password=(document.getElementById('admin-auth-password')||{}).value?.trim();
+  const errorEl=document.getElementById('admin-login-error');
+  const loginButton=document.getElementById('admin-login-submit-btn');
+  const originalText = loginButton?.textContent || '🔒 ADMIN LOGIN';
+  if(!email||!password){
+    if(errorEl){ errorEl.textContent='Enter admin email and password.'; errorEl.style.display='block'; }
+    return;
+  }
+  if(loginButton){ loginButton.disabled=true; loginButton.textContent='Verifying...'; }
+  await new Promise(requestAnimationFrame);
+  if(email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD){
+    adminLoginVerified=true;
+    if(errorEl){ errorEl.textContent=''; errorEl.style.display='none'; }
+    document.getElementById('login-overlay').style.display='none';
+    document.getElementById('app').style.display='flex';
+    initApp();
+    showPanel('admin');
+    return;
+  }
+  if(errorEl){ errorEl.textContent='Invalid admin login credentials.'; errorEl.style.display='block'; }
+  if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
+}
+function localAuthenticate(email,password){
+  const profile=getOwnerProfileData(email);
+  return profile.email.toLowerCase()===email.toLowerCase() && password===getUserPassword(email);
+}
+
+function buildSmsMessage(code){
+  return `Your Good Luck Rahman Enterprise business code is ${code}. It expires in 10 minutes.`;
+}
+
+async function saveLocalRegistration(email, ownerName, contact, password, pin, photo){
+  setCurrentAccount(email);
+  saveOwnerProfile(email, ownerName, contact, photo, 'local');
+  setUserPassword(password, email);
+  if(pin) setOwnerPin(pin, email);
+  DB.setSales([], email);
+  DB.setAudit([], email);
+  DB.setInventory([], email);
+  setDefaultInventory();
+  setExplicitLogout(false);
+  document.getElementById('login-overlay').style.display='none';
+  document.getElementById('app').style.display='flex';
+  initApp();
+  showPanel('dashboard');
+  toast('Account created locally. It will sync to Firebase when internet returns.','warning');
+}
+
+function isFirebaseNetworkError(err){
+  if(!err) return false;
+  return !navigator.onLine || err?.code === 'auth/network-request-failed' || /network|offline/i.test(err?.message||'');
 }
 
 async function doRegister(){
-  const email=(document.getElementById('auth-email')||{}).value?.trim();
-  const password=(document.getElementById('auth-password')||{}).value?.trim();
+  const firstName=(document.getElementById('auth-register-firstname')||{}).value?.trim();
+  const lastName=(document.getElementById('auth-register-lastname')||{}).value?.trim();
+  const email=(document.getElementById('auth-register-email')||{}).value?.trim();
+  const password=(document.getElementById('auth-register-password')||{}).value?.trim();
+  const pin=(document.getElementById('auth-register-pin')||{}).value?.trim();
+  const contact=(document.getElementById('auth-register-contact')||{}).value?.trim();
+  const ownerName=[firstName,lastName].filter(Boolean).join(' ');
   const el=document.getElementById('login-error');
-  if(!email||!password){
-    el.textContent='Please enter email and password.';
+  const registerButton=document.getElementById('register-submit-btn');
+  const originalText = registerButton?.textContent || 'CREATE ACCOUNT';
+  if(!firstName||!lastName||!contact||!email||!password||!pin){
+    el.textContent='Please complete all registration fields.';
     return;
   }
-  const ownerName=(document.getElementById('auth-name')||{}).value?.trim();
+  if(password.length < 6){
+    el.textContent='Password must be at least 6 characters.';
+    return;
+  }
+  if(!/^[0-9]{4}$/.test(pin)){
+    el.textContent='PIN must be exactly 4 digits.';
+    return;
+  }
+  if(registerButton){
+    registerButton.disabled=true;
+    registerButton.textContent='Creating account...';
+  }
+  await new Promise(requestAnimationFrame);
+  const photo=pendingRegistrationPhoto || '';
   if(firebaseAuth){
+    if(!navigator.onLine){
+      el.textContent = 'Internet is required to create an account. Please connect to the internet and try again.';
+      if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
+      return;
+    }
     try{
-      if(!ownerName){
-        el.textContent='Please enter your full name to register.';
-        return;
-      }
-      if(!await canRegisterWithEmail(email)){
-        el.textContent='Registration is disabled. Use the configured owner email to sign in.';
-        return;
-      }
-      await ensureOwnerConfig(email);
       justLoggedIn=true;
       const userCredential=await firebaseSignUp(email,password);
       const user=userCredential.user;
@@ -623,26 +1860,76 @@ async function doRegister(){
         DB.setAudit([]);
         DB.setInventory([]);
         setDefaultInventory();
+        saveOwnerProfile(email, ownerName, contact, photo, 'email');
+        setUserPassword(password);
+        setOwnerPin(pin);
+        setExplicitLogout(false);
         await saveUserDataToFirestore();
         document.getElementById('login-overlay').style.display='none';
         document.getElementById('app').style.display='flex';
-        setExplicitLogout(false);
-        setOwnerPin('1234');
-        saveOwnerProfile(email, ownerName);
         initApp();
         return;
       }
     }catch(err){
       console.error(err);
-      el.textContent=err.message||'Registration failed. Please try again.';
+      let message = 'Registration failed. Please try again.';
+      if(err?.code === 'auth/email-already-in-use'){
+        message = 'Email is already registered. Please log in or reset your password.';
+      } else if(err?.code === 'auth/invalid-email'){
+        message = 'Please enter a valid email address.';
+      } else if(err?.code === 'auth/weak-password'){
+        message = 'Password is too weak. Please use at least 6 characters.';
+      } else if(isFirebaseNetworkError(err)){
+        message = 'Unable to connect to the internet. Please check your connection and try again.';
+      }
+      el.textContent=message;
+      if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
       return;
     }
   }
-  el.textContent='Registration is not available right now.';
+  const existing=DB.getScoped(OWNER_PROFILE_KEY, email);
+  if(existing && existing.email){
+    el.textContent='A user is already registered. Please log in.';
+    if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
+    return;
+  }
+  saveLocalRegistration(email, ownerName, contact, password, pin, photo);
+  if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
 }
 
-document.getElementById('auth-password').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
+
+document.getElementById('auth-password')?.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){
+    const registerMode=document.getElementById('register-mode');
+    if(registerMode && registerMode.style.display==='block'){
+      doRegister();
+    } else {
+      doLogin();
+    }
+  }
+});
+document.getElementById('auth-register-password')?.addEventListener('keydown',e=>{if(e.key==='Enter')doRegister();});
+document.getElementById('auth-register-pin')?.addEventListener('keydown',e=>{if(e.key==='Enter')doRegister();});
 document.getElementById('auth-pin')?.addEventListener('keydown',e=>{if(e.key==='Enter')doUnlock();});
+function invalidateWholesaleOtpIfCredentialsChanged(){
+  if(!wholesalePendingOtpSession) return;
+  wholesalePendingOtpSession=null;
+  setWholesaleCodeSectionVisible(false);
+  clearWholesaleOtpDigits();
+  const sendBtn=document.getElementById('wholesale-send-email-btn');
+  if(sendBtn && !wholesaleEmailSendInFlight) sendBtn.textContent='SEND CODE';
+}
+['wholesale-login-phone-local','wholesale-login-email'].forEach(id=>{
+  const el=document.getElementById(id);
+  el?.addEventListener('input',invalidateWholesaleOtpIfCredentialsChanged);
+  el?.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){
+      e.preventDefault();
+      void beginWholesaleEmailVerification();
+    }
+  });
+});
+initWholesaleOtpDigitInputs();
 
 const SALE_DELETE_REASONS=[
   'Customer Return - Unwanted',
@@ -668,7 +1955,12 @@ async function doLogout(){
   try{
     await firebaseSignOut();
   }catch(_e){}
+  setCurrentAccount('');
+  wholesaleBrowseWithoutLogin=false;
+  adminLoginVerified=false;
+  DB.delete(WHOLESALE_ACCESS_KEY);
   setExplicitLogout(true);
+  profileAccessUnlocked=false;
   document.getElementById('app').style.display='none';
   document.getElementById('login-overlay').style.display='flex';
   document.getElementById('auth-pin').value='';
@@ -676,10 +1968,22 @@ async function doLogout(){
   const passEl=document.getElementById('auth-password');
   if(emailEl) emailEl.value='';
   if(passEl) passEl.value='';
-  setLoginMode('full');
+  setLoginMode('welcome');
 }
 
 let toastTimer=null;
+function togglePasswordVisibility(inputId, button){
+  const input = document.getElementById(inputId);
+  if(!input) return;
+  if(input.type === 'password'){
+    input.type = 'text';
+    button.textContent = 'Hide';
+  } else {
+    input.type = 'password';
+    button.textContent = 'Show';
+  }
+}
+
 function toast(msg,type=''){
   const el=document.getElementById('toast');
   el.textContent=msg;
@@ -689,35 +1993,232 @@ function toast(msg,type=''){
 }
 
 function showPanel(id){
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>{
+    p.classList.remove('active');
+    p.style.display='none';
+  });
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
   const panel=document.getElementById('panel-'+id);
-  if(panel) panel.classList.add('active');
-  const tabs=document.querySelectorAll('.nav-tab');
-  const map={dashboard:0,sales:1,payment:2,records:3,inventory:4,audit:5};
-  if(map[id]!==undefined)tabs[map[id]].classList.add('active');
+  if(panel){
+    panel.style.display='block';
+    panel.classList.add('active');
+  }
+  // Hide or show nav bars depending on section
+  const mainNav=document.getElementById('main-nav');
+  const wholesaleNav=document.getElementById('wholesale-nav');
+  const profileAvatar=document.querySelector('.owner-header-avatar');
+  const updateButton=document.querySelector('.btn-header');
+  const hideHeaderExtras = id === 'wholesale' || id === 'admin';
+  if(mainNav) mainNav.style.display = hideHeaderExtras ? 'none' : 'flex';
+  if(wholesaleNav) wholesaleNav.style.display = id === 'wholesale' ? 'flex' : 'none';
+  if(profileAvatar) profileAvatar.style.display = hideHeaderExtras ? 'none' : '';
+  if(updateButton) updateButton.style.display = hideHeaderExtras ? 'none' : '';
   if(id==='dashboard')renderDashboard();
   if(id==='records')renderRecords();
   if(id==='payment')renderOutstanding();
   if(id==='inventory')renderInventory();
   if(id==='audit')renderAudit();
-  if(id==='profile') renderOwnerProfile();
-  if(id==='update') renderUpdatePanel();
+  if(id==='profile') renderProfileSection();
+  if(id==='wholesale') showWholesaleSection();
+  if(id==='admin') loadAdminPanel();
+}
+
+function openWholesaleFromWelcome(){
+  wholesaleBrowseWithoutLogin=true;
+  updateWholesaleVisibility();
+  hideAppLoader();
+  const overlay=document.getElementById('login-overlay');
+  const appEl=document.getElementById('app');
+  if(overlay) overlay.style.display='none';
+  if(appEl) appEl.style.display='flex';
+  initApp();
+  showWholesaleContent();
+  showPanel('wholesale');
+}
+
+function updateWholesaleVisibility(){
+  const wholesaleNav=document.getElementById('wholesale-nav');
+  if(!wholesaleNav) return;
+  const showNav=wholesaleBrowseWithoutLogin||!!getCurrentUser()||!!getRegisteredEmail();
+  wholesaleNav.style.display=showNav?'flex':'none';
+}
+
+// Wholesales Panel Management
+function showWholesaleSection(){
+  const mainNav=document.getElementById('main-nav');
+  const wholesaleNav=document.getElementById('wholesale-nav');
+  if(mainNav) mainNav.style.display='none';
+  if(wholesaleNav) wholesaleNav.style.display='flex';
+  showWholesalePanel('dashboard');
+}
+
+function showWholesalePanel(panelName){
+  // Hide all wholesale sub-panels
+  document.querySelectorAll('.wholesale-sub-panel').forEach(p=>p.style.display='none');
+  document.querySelectorAll('#wholesale-nav .nav-tab').forEach(t=>t.classList.remove('active'));
+  
+  // Show the selected panel
+  const panelId=`wholesale-panel-${panelName}`;
+  const panel=document.getElementById(panelId);
+  if(panel){
+    panel.style.display='block';
+  }
+  
+  // Highlight the corresponding nav tab
+  const navBtn=Array.from(document.querySelectorAll('#wholesale-nav .nav-tab')).find(btn=>btn.onclick?.toString().includes(`'${panelName}'`));
+  if(navBtn) navBtn.classList.add('active');
+  
+  // Call panel-specific functions
+  if(panelName==='dashboard') renderWholesaleDashboard();
+}
+
+function renderWholesaleDashboard(){
+  // Render wholesale dashboard data
+  // This can be extended with real data from Firebase Storage
+  populateProductDropdown();
+}
+
+// Admin Login Functions
+function showAdminLoginModal(){
+  const modal=document.getElementById('modal-admin-login');
+  if(modal){
+    modal.style.display='block';
+    document.getElementById('admin-login-email').value='';
+    document.getElementById('admin-login-password').value='';
+    document.getElementById('admin-login-error').style.display='none';
+  }
+}
+
+function closeAdminLoginModal(){
+  const modal=document.getElementById('modal-admin-login');
+  if(modal) modal.style.display='none';
+  document.getElementById('admin-login-email').value='';
+  document.getElementById('admin-login-password').value='';
+  document.getElementById('admin-login-error').style.display='none';
+}
+
+function verifyAdminLogin(){
+  const email=(document.getElementById('admin-login-email')||{}).value?.trim();
+  const password=(document.getElementById('admin-login-password')||{}).value?.trim();
+  const errorEl=document.getElementById('admin-login-error');
+  
+  if(!email || !password){
+    errorEl.textContent='Please enter both email and password.';
+    errorEl.style.display='block';
+    return;
+  }
+  
+  if(email===ADMIN_EMAIL && password===ADMIN_PASSWORD){
+    adminLoginVerified=true;
+    closeAdminLoginModal();
+    document.getElementById('login-overlay').style.display='none';
+    document.getElementById('app').style.display='flex';
+    initApp();
+    showPanel('admin');
+    toast('Admin access granted.','success');
+  } else {
+    errorEl.textContent='Invalid admin credentials. Please check your email and password.';
+    errorEl.style.display='block';
+  }
+}
+
+// Firebase Storage Functions for Wholesales Data
+async function uploadWholesaleData(dataType, data){
+  if(!firebaseStorage || !firebaseAuth?.currentUser) return false;
+  try{
+    const timestamp=new Date().toISOString();
+    const path=`wholesales/${getCurrentAccount()}/${dataType}/${timestamp}.json`;
+    const ref=firebaseStorage.ref(path);
+    const blob=new Blob([JSON.stringify(data)], {type:'application/json'});
+    await ref.put(blob);
+    return true;
+  }catch(err){
+    console.error('Error uploading to Firebase Storage:', err);
+    return false;
+  }
+}
+
+async function downloadWholesaleData(dataType){
+  if(!firebaseStorage || !firebaseAuth?.currentUser) return null;
+  try{
+    const path=`wholesales/${getCurrentAccount()}/${dataType}/`;
+    const ref=firebaseStorage.ref(path);
+    const items=await ref.listAll();
+    if(items.items.length===0) return null;
+    // Get the most recent file
+    const latestFile=items.items[items.items.length-1];
+    const url=await latestFile.getDownloadURL();
+    const response=await fetch(url);
+    return await response.json();
+  }catch(err){
+    console.error('Error downloading from Firebase Storage:', err);
+    return null;
+  }
+}
+
+async function saveWholesaleSale(){
+  const customer=(document.getElementById('ws-customer')||{}).value?.trim();
+  const product=(document.getElementById('ws-product')||{}).value?.trim();
+  const price=parseFloat((document.getElementById('ws-price')||{}).value||0);
+  const qty=parseInt((document.getElementById('ws-qty')||{}).value||1);
+  
+  if(!customer || !product || !price || !qty){
+    toast('Please fill in all fields for wholesale sale.','warning');
+    return;
+  }
+  
+  const saleData={
+    id:uid(),
+    type:'wholesale',
+    customer,
+    product,
+    price,
+    qty,
+    total:price*qty,
+    timestamp:new Date().toISOString(),
+    account:getCurrentAccount(),
+  };
+  
+  // Save to local DB
+  const sales=DB.getSales();
+  sales.push(saleData);
+  DB.setSales(sales);
+  
+  // Upload to Firebase Storage
+  if(firebaseAuth?.currentUser){
+    await uploadWholesaleData('sales', saleData);
+  }
+  
+  clearWholesaleSaleForm();
+  toast('Wholesale sale saved and synced to Firebase Storage.','success');
+}
+
+function clearWholesaleSaleForm(){
+  document.getElementById('ws-customer').value='';
+  document.getElementById('ws-product').value='';
+  document.getElementById('ws-price').value='';
+  document.getElementById('ws-qty').value='1';
 }
 
 function uid(){
   const currentYear = new Date().getFullYear().toString().slice(-2);
-  const ids=[...DB.getSales(), ...DB.getAudit()].map(item=>item.id);
-  let maxSerial=0;
-  const matchRegex=new RegExp(`^INV-${currentYear}-(\\d{4})$`);
+  const ids = [...DB.getSales(), ...DB.getAudit()].map(item => item.id);
+  let maxSerial = 0;
+  let maxSerialLen = 4; // Always at least 4 digits
+  // Match any INV-YY-serial, serial can be any length
+  const matchRegex = new RegExp(`^INV-${currentYear}-(\\d+)$`);
   for(const id of ids){
-    const match=id?.match(matchRegex);
+    const match = id?.match(matchRegex);
     if(match){
-      const value=parseInt(match[1],10);
-      if(value>maxSerial) maxSerial=value;
+      const value = parseInt(match[1], 10);
+      if(value > maxSerial) maxSerial = value;
+      if(match[1].length > maxSerialLen) maxSerialLen = match[1].length;
     }
   }
-  const nextSerial=String(maxSerial+1).padStart(4,'0');
+  // If next serial will be longer, increase padding
+  const nextSerialNum = maxSerial + 1;
+  const nextSerialLen = Math.max(maxSerialLen, String(nextSerialNum).length, 4);
+  const nextSerial = String(nextSerialNum).padStart(nextSerialLen, '0');
   return `INV-${currentYear}-${nextSerial}`;
 }
 function iuid(){
@@ -742,6 +2243,12 @@ function fmtDateTime(dateIso,timeStr){
 }
 function saleSyncBadge(sale){
   return '';
+}
+function sortSalesByIdAscending(sales){
+  return (sales||[]).slice().sort((a,b)=>{
+    if(!a?.id||!b?.id) return 0;
+    return a.id.localeCompare(b.id, undefined, {numeric:true, sensitivity:'base'});
+  });
 }
 function resolveOwnerPhotoSrc(src){
   if(!src)return '';
@@ -798,8 +2305,9 @@ function uploadOwnerPhoto(){
 }
 
 function loadOwnerPhoto(){
-  const stored=DB.get('owner_photo');
-  const raw=stored||firstBundledOwnerPhotoPath();
+  const profile=getOwnerProfileData();
+  const stored=DB.getScoped('owner_photo');
+  const raw=profile.photo || stored || firstBundledOwnerPhotoPath();
   if(!raw)return;
   const ownerPhoto=resolveOwnerPhotoSrc(raw);
   const img=document.getElementById('owner-login-img');
@@ -829,12 +2337,36 @@ function loadOwnerPhoto(){
   img.src=ownerPhoto;
 }
 
-// Initialize owner photo and hide loader on page load
-document.addEventListener('DOMContentLoaded', function(){
+function startupInitialize(){
   loadOwnerPhoto();
   initLoginScreen();
   renderOwnerProfile();
+  setupUpdateEventHandlers();
+  checkForUpdatesOnStartup();
+  const overlay=document.getElementById('login-overlay');
+  if(overlay) overlay.style.display='flex';
   hideAppLoader();
+}
+
+if(document.readyState==='interactive' || document.readyState==='complete'){
+  startupInitialize();
+} else {
+  document.addEventListener('DOMContentLoaded', startupInitialize);
+}
+
+window.addEventListener('error', function(event){
+  hideAppLoader();
+  const overlay=document.getElementById('login-overlay');
+  if(overlay) overlay.style.display='flex';
+  const errEl=document.getElementById('login-error');
+  if(errEl) errEl.textContent='App failed to start: '+(event?.message||'Unknown error');
+});
+window.addEventListener('unhandledrejection', function(event){
+  hideAppLoader();
+  const overlay=document.getElementById('login-overlay');
+  if(overlay) overlay.style.display='flex';
+  const errEl=document.getElementById('login-error');
+  if(errEl) errEl.textContent='App error: '+(event?.reason?.message||String(event?.reason)||'Unknown promise error');
 });
 
 function openModal(id){
@@ -862,17 +2394,72 @@ function setDeleteReasonOptions(type){
   sel.innerHTML='<option value="">Select Reason</option>'+reasons.map(r=>`<option value="${r}">${r}</option>`).join('');
 }
 
+function populateAuditReasonFilter(){
+  const sel=document.getElementById('audit-reason-filter');
+  if(!sel) return;
+  const merged=[...SALE_DELETE_REASONS,...INVENTORY_DELETE_REASONS];
+  const unique=[...new Set(merged)];
+  sel.innerHTML='<option value="">All Reasons</option>'+unique.map(r=>`<option value="${r.replace(/"/g,'&quot;')}">${r}</option>`).join('');
+}
+
 function checkNet(){
   const online=navigator.onLine;
   document.getElementById('net-dot').className='sync-dot'+(online?' online':'');
-  document.getElementById('net-label').textContent=online?'Online':'Offline';
+  document.getElementById('net-label').textContent=online?'Online':'Offline (local only)';
+  if(lastNetworkOnline !== null && online !== lastNetworkOnline){
+    if(online){
+      toast('Back online. Local changes will sync now.','success');
+    } else {
+      toast('Offline mode active. Data is saved locally and will sync when you reconnect.','warning');
+    }
+  }
+  lastNetworkOnline = online;
   return online;
 }
-window.addEventListener('online',()=>{checkNet();syncToCloud(true);});
-window.addEventListener('offline',checkNet);
+async function ensureCloudAccountForLocalUser(){
+  if(!navigator.onLine || !firebaseAuth) return;
+  if(getCurrentUser()) return;
+  const primary=getPrimaryAccountEmail();
+  const profile=primary?getOwnerProfileData(primary):getOwnerProfileData();
+  if(profile.authProvider !== 'local') return;
+  const password=getUserPassword(profile.email);
+  if(!profile.email || !password) return;
+  try{
+    await firebaseSignIn(profile.email,password);
+    return;
+  }catch(err){
+    if(err?.code === 'auth/user-not-found'){
+      try{
+        await firebaseSignUp(profile.email,password);
+        toast('Local account synced to Firebase successfully.','success');
+      }catch(signUpErr){
+        if(signUpErr?.code === 'auth/email-already-in-use'){
+          toast('This email already exists in Firebase. Please sign in manually.','warning');
+        }
+      }
+    }
+  }
+}
+
+window.addEventListener('online',async ()=>{
+  checkNet();
+  await ensureCloudAccountForLocalUser();
+  const hasPending=DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
+  if(hasPending){
+    toast('Internet restored! Backing up offline data...','info');
+    syncToCloud(false);
+  }
+});
+window.addEventListener('offline',()=>{
+  checkNet();
+  stopOfflineSyncRetry();
+});
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'&&navigator.onLine){
-    syncToCloud(true);
+  if(document.visibilityState==='visible' && navigator.onLine){
+    const hasPending=DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
+    if(hasPending){
+      syncToCloud(true);
+    }
   }
 });
 
@@ -930,9 +2517,37 @@ function populateProductDropdown(){
   const sel=document.getElementById('s-product');const cur=sel.value;
   sel.innerHTML='<option value="">- Select Product -</option>'+inv.map((p)=>`<option value="${p.id}">${p.name}</option>`).join('');
   sel.value=cur;
+  // Also populate wholesale dropdown if it exists
+  const wsSel=document.getElementById('ws-product');
+  if(wsSel){
+    const wsCur=wsSel.value;
+    wsSel.innerHTML='<option value="">- Select Product -</option>'+inv.map((p)=>`<option value="${p.id}">${p.name}</option>`).join('');
+    wsSel.value=wsCur;
+  }
 }
 
 // SALES
+function normalizePhone(value){
+  return (value||'').toString().replace(/[^0-9+]/g,'').trim();
+}
+function getOwnerPhone(){
+  return normalizePhone(DB.get(OWNER_PHONE_KEY) || '');
+}
+function setOwnerPhone(phone){
+  const normalized = normalizePhone(phone);
+  if(normalized){
+    DB.set(OWNER_PHONE_KEY, normalized);
+  } else {
+    DB.delete(OWNER_PHONE_KEY);
+  }
+  return normalized;
+}
+function showWholesaleContent(){
+  // This function is called when entering wholesale section from login
+  // It ensures the navigation and first panel are shown
+  showWholesaleSection();
+}
+
 let payType='full';
 function setPayType(t){
   payType=t;
@@ -1023,7 +2638,7 @@ function renderSessionTable(){
   const sales=DB.getSales().filter(s=>s.date===today());
   const tb=document.getElementById('session-table');
   if(!sales.length){tb.innerHTML='<tr><td colspan="10" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No sales recorded today.</td></tr>';return;}
-  tb.innerHTML=sales.slice().reverse().map(s=>{
+  tb.innerHTML=sortSalesByIdAscending(sales).map(s=>{
     const profitValue=getRecordedProfit(s);
     return `
     <tr>
@@ -1206,12 +2821,12 @@ function recordPayment(){
   document.getElementById('pay-id-input').value='';
   document.getElementById('pay-results').innerHTML='';
   document.getElementById('id-lookup-result').className='found-record-preview';
-  renderOutstanding();toast('Payment recorded!','success');
+  renderOutstanding();renderDashboard();renderRecords();toast('Payment recorded!','success');
 }
 function renderOutstanding(){
   const sales=DB.getSales().filter(s=>s.balance>0);
   const tb=document.getElementById('outstanding-table');
-  if(!sales.length){tb.innerHTML='<tr><td colspan="7" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No outstanding balances.</td></tr>';return;}
+  if(!sales.length){tb.innerHTML='<tr><td colspan="8" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No outstanding balances.</td></tr>';return;}
   tb.innerHTML=sales.map(s=>`
     <tr>
       <td><span class="sale-id-badge">${s.id}</span></td>
@@ -1231,7 +2846,12 @@ let recView='daily';
 function setRecView(v,btn){
   recView=v;
   document.querySelectorAll('#panel-records .view-tab').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');renderRecords();
+  btn.classList.add('active');
+  document.getElementById('records-card').style.display = v === 'history' ? 'none' : '';
+  document.getElementById('history-panel').style.display = v === 'history' ? '' : 'none';
+  document.getElementById('rec-filter-bar').style.display = v === 'history' ? 'none' : '';
+  if(v === 'history') renderHistory();
+  else renderRecords();
 }
 function filterSalesByView(sales){
   if(recView==='daily')return sales.filter(s=>s.date===today());
@@ -1242,6 +2862,7 @@ function filterSalesByView(sales){
   return sales;
 }
 function renderRecords(){
+  if(recView==='history'){ renderHistory(); return; }
   const allSales=DB.getSales();
   const filtered=filterSalesByView(allSales);
   const q=(document.getElementById('rec-search')?.value||'').toLowerCase();
@@ -1261,7 +2882,7 @@ function renderRecords(){
     <div class="stat-card"><div class="stat-label">All-Time Qty</div><div class="stat-value">${totalAllQty}</div><div class="stat-sub">Includes all periods</div></div>`;
   const tb=document.getElementById('records-table');
   if(!shown.length){tb.innerHTML='<tr><td colspan="10" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No records for this period.</td></tr>';return;}
-  tb.innerHTML=shown.slice().reverse().map(s=>`
+  tb.innerHTML=sortSalesByIdAscending(shown).map(s=>`
     <tr>
       <td><span class="sale-id-badge">${s.id}</span></td>
       <td><span class="datetime-badge">${dateStr(s.date)}</span></td>
@@ -1275,6 +2896,62 @@ function renderRecords(){
       <td style="display:flex;gap:.5rem;flex-wrap:wrap;">
         <button class="btn btn-danger btn-sm" onclick="promptDelete('${s.id}')">REMOVE</button>
       </td>
+    </tr>`).join('');
+}
+
+function getMonthLabel(isoMonth){
+  const [year,month]=isoMonth.split('-');
+  const date=new Date(`${year}-${month}-01T00:00:00`);
+  return date.toLocaleString('en-GB',{month:'long'});
+}
+function buildHistoryGroups(sales){
+  const groups={};
+  for(const s of sales){
+    const year=s.date.slice(0,4);
+    const month=s.date.slice(0,7);
+    if(!groups[year]) groups[year]={revenue:0,profit:0,qty:0,months:{}};
+    const yearGroup=groups[year];
+    const profitValue=getRecordedProfit(s);
+    yearGroup.revenue += s.paid;
+    yearGroup.profit += profitValue;
+    yearGroup.qty += s.qty;
+    if(!yearGroup.months[month]){
+      yearGroup.months[month] = {month, label:getMonthLabel(month), revenue:0, profit:0, qty:0};
+    }
+    const monthGroup=yearGroup.months[month];
+    monthGroup.revenue += s.paid;
+    monthGroup.profit += profitValue;
+    monthGroup.qty += s.qty;
+  }
+  return groups;
+}
+function renderHistory(){
+  const allSales=DB.getSales();
+  const groups=buildHistoryGroups(allSales);
+  const years=Object.keys(groups).sort((a,b)=>b.localeCompare(a));
+  const yearSelect=document.getElementById('history-year-select');
+  if(!yearSelect) return;
+  const selected=yearSelect.value || years[0] || '';
+  yearSelect.innerHTML = years.map(y=>`<option value="${y}"${y===selected?' selected':''}>${y}</option>`).join('');
+  const activeYear=selected || years[0] || '';
+  const yearGroup=groups[activeYear] || {revenue:0,profit:0,qty:0,months:{}};
+  document.getElementById('history-stats').innerHTML = `
+    <div class="stat-card success"><div class="stat-label">Year Revenue</div><div class="stat-value">${fmt(yearGroup.revenue)}</div></div>
+    <div class="stat-card success"><div class="stat-label">Year Profit</div><div class="stat-value">${fmt(yearGroup.profit)}</div></div>
+    <div class="stat-card"><div class="stat-label">Qty Sold</div><div class="stat-value">${yearGroup.qty}</div></div>
+    <div class="stat-card"><div class="stat-label">Months Recorded</div><div class="stat-value">${Object.keys(yearGroup.months).length}</div></div>`;
+  const months=Object.values(yearGroup.months).sort((a,b)=>a.month.localeCompare(b.month));
+  const tb=document.getElementById('history-table');
+  if(!months.length){
+    tb.innerHTML = '<tr><td colspan="4" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No history records for this year.</td></tr>';
+    return;
+  }
+  tb.innerHTML = months.map(m=>`
+    <tr>
+      <td>${m.label}</td>
+      <td>${fmt(m.revenue)}</td>
+      <td style="color:${m.profit>=0?'var(--success)':'var(--danger)'};">${fmt(m.profit)}</td>
+      <td>${m.qty}</td>
     </tr>`).join('');
 }
 
@@ -1295,7 +2972,7 @@ function renderDeleteDesk(){
     tb.innerHTML='<tr><td colspan="8" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No records found for deletion.</td></tr>';
     return;
   }
-  tb.innerHTML=sales.slice().reverse().map(s=>`
+  tb.innerHTML=sortSalesByIdAscending(sales).map(s=>`
     <tr>
       <td><span class="sale-id-badge">${s.id}</span></td>
       <td>${fmtDateTime(s.date,s.time)}</td>
@@ -1421,7 +3098,7 @@ function confirmDelete(){
     queueSync('append_audit',productAudit);
     queueSync('delete_inventory',{id:prod.id});
     DB.setAudit(audit);inv.splice(index,1);DB.setInventory(inv);
-    closeModal('modal-delete');renderInventory();populateProductDropdown();renderDashboard();renderRecords();renderSessionTable();
+    closeModal('modal-delete');renderInventory();populateProductDropdown();renderDashboard();renderRecords();renderSessionTable();renderOutstanding();renderAudit();
     toast(`Product removed. ${affectedCount} related sale(s) archived.`,'success');
   } else {
     const sales=DB.getSales();const i=sales.findIndex(s=>s.id===id);if(i<0)return;
@@ -1431,7 +3108,7 @@ function confirmDelete(){
     queueSync('append_audit',saleAudit);
     queueSync('delete_sale',{id:sale.id});
     DB.setAudit(audit);sales.splice(i,1);DB.setSales(sales);
-    closeModal('modal-delete');renderRecords();renderDashboard();renderSessionTable();
+    closeModal('modal-delete');renderRecords();renderDashboard();renderSessionTable();renderOutstanding();renderAudit();
     toast('Record archived to Audit Log.','success');
   }
 }
@@ -1513,15 +3190,22 @@ function getReasonCategory(reason){
 
 async function syncToCloud(silent=false){
   if(syncInProgress)return false;
-  if(!navigator.onLine)return false;
+  if(!navigator.onLine){
+    if(!silent)toast('No internet. Data saved locally. Will sync when connected.','warning');
+    return false;
+  }
   const syncUrl=getSyncUrl();
   const user=getCurrentUser();
   const canSaveFirestore=!!user && !!firebaseStore;
   if(!syncUrl && !canSaveFirestore){
-    if(!silent)toast('Backup URL not set and no authenticated cloud user.','warning');
+    if(!silent)toast('Backup not configured. Please set up cloud backup in settings.','warning');
     return false;
   }
   const queue=DB.getSyncQueue();
+  const unSyncedSales=DB.getSales().filter(s=>!s.synced).length;
+  if(queue.length===0 && unSyncedSales===0){
+    return true;
+  }
   const payload={
     deviceId:getDeviceId(),
     sentAt:new Date().toISOString(),
@@ -1533,30 +3217,78 @@ async function syncToCloud(silent=false){
     },
   };
   syncInProgress=true;
+  let googleSheetSuccess=false;
+  let firestoreSuccess=false;
+  let syncErrors=[];
   try{
     if(syncUrl){
-      const res=await fetch(syncUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-      if(!res.ok)throw new Error('Sync failed');
+      try{
+        const res=await fetch(syncUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),timeout:20000});
+        if(!res.ok)throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        googleSheetSuccess=true;
+      }catch(e){
+        console.error('Google Sheets sync failed:',e);
+        syncErrors.push('Google Sheets: '+String(e));
+      }
+    }
+    if(canSaveFirestore){
+      try{
+        await saveUserDataToFirestore();
+        firestoreSuccess=true;
+      }catch(e){
+        console.error('Firestore sync failed:',e);
+        syncErrors.push('Firebase: '+String(e));
+      }
+    }
+    if(googleSheetSuccess || firestoreSuccess){
       const sales=DB.getSales().map(s=>({...s,synced:true}));
       DB.setSales(sales);
       DB.setSyncQueue([]);
-      DB.setSyncState({lastSyncedAt:new Date().toISOString(),lastStatus:'success'});
-      if(!silent)toast('Backup synced to Google Sheet successfully.','success');
+      syncRetryCountOnline=0;
+      DB.setSyncState({lastSyncedAt:new Date().toISOString(),lastStatus:'success',synced:true});
+      if(!silent)toast('✓ All offline data backed up to cloud successfully!','success');
+      refreshSyncBadge();
+      renderDashboard();renderSessionTable();renderRecords();
+      stopOfflineSyncRetry();
+      return true;
+    }else if(syncErrors.length>0){
+      DB.setSyncState({lastSyncedAt:new Date().toISOString(),lastStatus:'failed',lastError:syncErrors.join(' | ')});
+      if(!silent)toast('Sync failed. Will retry automatically: '+syncErrors.join(', '),'danger');
+      syncRetryCountOnline++;
+      scheduleOfflineSyncRetry();
+      return false;
     }
-    if(canSaveFirestore){
-      await saveUserDataToFirestore();
-      if(!syncUrl && !silent) toast('Backup saved to user cloud storage.','success');
-    }
-    refreshSyncBadge();
-    renderDashboard();renderSessionTable();renderRecords();
-    return true;
   }catch(e){
+    console.error('Unexpected sync error:',e);
     DB.setSyncState({lastSyncedAt:new Date().toISOString(),lastStatus:'failed',lastError:String(e)});
-    refreshSyncBadge();
-    if(!silent)toast('Backup failed. Data is safe locally and will sync when connection works.','danger');
+    if(!silent)toast('Unexpected error during sync. Will retry.','danger');
+    scheduleOfflineSyncRetry();
     return false;
   }finally{
     syncInProgress=false;
+    refreshSyncBadge();
+  }
+}
+
+function scheduleOfflineSyncRetry(){
+  if(offlineSyncRetryTimer)clearInterval(offlineSyncRetryTimer);
+  offlineSyncRetryTimer=setInterval(()=>{
+    if(navigator.onLine && !syncInProgress){
+      const hasPending=DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
+      if(hasPending){
+        syncToCloud(true);
+      }else{
+        stopOfflineSyncRetry();
+      }
+    }
+  },8000);
+}
+
+function stopOfflineSyncRetry(){
+  if(offlineSyncRetryTimer){
+    clearInterval(offlineSyncRetryTimer);
+    offlineSyncRetryTimer=null;
+    syncRetryCountOnline=0;
   }
 }
 
@@ -1571,18 +3303,114 @@ async function backupToCloud(){
   await syncToCloud(false);
 }
 
-function openUpdatePanel(){
-  showPanel('update');
-  renderUpdatePanel();
+function setUpdatePanelStatus(message,type=''){
+  // Show update status as alert or console log
+  const colors={success:'✅',danger:'❌',warning:'⚠️'};
+  const icon=colors[type]||'ℹ️';
+  if(type==='success'||type==='danger'){
+    alert(`${icon} ${message}`);
+  } else {
+    console.log(`[UPDATE] ${message}`);
+  }
 }
 
-function setUpdatePanelStatus(message,type=''){
-  const statusEl=document.getElementById('update-status-message');
-  if(statusEl) statusEl.textContent=message;
-  if(statusEl){
-    if(type==='success') statusEl.style.color='var(--success)';
-    else if(type==='danger') statusEl.style.color='var(--danger)';
-    else statusEl.style.color='var(--text-secondary)';
+function formatBytes(value){
+  if(!value || typeof value !== 'number' || value <= 0) return '0.00';
+  return (value / 1024 / 1024).toFixed(2);
+}
+
+function getUpdatePackageSize(info){
+  if(!info || !Array.isArray(info.files)) return null;
+  const total = info.files.reduce((sum,file)=>{
+    if(file && typeof file.size === 'number' && file.size > 0) return sum + file.size;
+    return sum;
+  }, 0);
+  return total > 0 ? total : null;
+}
+
+function showUpdateProgress(show){
+  const wrapper=document.getElementById('update-progress-wrapper');
+  const progressBar=document.getElementById('update-progress-bar');
+  const details=document.getElementById('update-progress-details');
+  const summary=document.getElementById('update-progress-summary');
+  if(!wrapper) return;
+  wrapper.style.display = show ? 'block' : 'none';
+  if(show){
+    if(progressBar && progressBar.style.width==='') progressBar.style.width='0%';
+    if(details && !details.textContent) details.textContent='Preparing download...';
+    if(summary && !summary.textContent) summary.textContent='';
+  } else {
+    if(progressBar) progressBar.style.width='0%';
+    if(details) details.textContent='Waiting to download...';
+    if(summary) summary.textContent='';
+  }
+}
+
+function setupUpdateEventHandlers(){
+  if(!electronAvailable || !window.electronAPI) return;
+  if(typeof window.electronAPI.onUpdateAvailable === 'function'){
+    window.electronAPI.onUpdateAvailable((info)=>{
+      const sizeBytes = getUpdatePackageSize(info);
+      const sizeLabel = sizeBytes ? ` • ${formatBytes(sizeBytes)} MB` : '';
+      const message = `Update available: version ${info?.version || 'new'}${sizeLabel}. Click download to install.`;
+      toast(message,'success');
+      setUpdatePanelStatus(message,'success');
+      const downloadBtn=document.getElementById('download-update-btn');
+      if(downloadBtn) downloadBtn.style.display='inline-flex';
+    });
+  }
+  if(typeof window.electronAPI.onUpdateDownloadProgress === 'function'){
+    window.electronAPI.onUpdateDownloadProgress((progress)=>{
+      showUpdateProgress(true);
+      const percent = progress?.percent != null ? Math.min(Math.max(progress.percent,0),100).toFixed(0) : null;
+      const transferredBytes = progress?.transferred;
+      const totalBytes = progress?.total;
+      const transferred = formatBytes(transferredBytes);
+      const total = formatBytes(totalBytes);
+      const speed = formatBytes(progress?.bytesPerSecond);
+      const progressBar=document.getElementById('update-progress-bar');
+      if(progressBar && percent !== null){ progressBar.style.width=`${percent}%`; }
+      const details=document.getElementById('update-progress-details');
+      if(details){
+        details.textContent = percent !== null
+          ? `Downloading update — ${percent}% complete`
+          : `Downloading update...`;
+      }
+      const summary=document.getElementById('update-progress-summary');
+      if(summary){
+        summary.textContent = percent !== null
+          ? `${transferred} / ${total} MB • ${percent}% • ${speed} MB/s`
+          : `Downloading...`;
+      }
+      if(totalBytes && details){
+        setUpdatePanelStatus(`Downloading update (${total} MB)... ${percent !== null ? percent + '%' : ''}`,'success');
+      } else {
+        setUpdatePanelStatus(`Downloading update... ${percent !== null ? percent + '%' : ''}`,'success');
+      }
+    });
+  }
+  if(typeof window.electronAPI.onUpdateDownloaded === 'function'){
+    window.electronAPI.onUpdateDownloaded((_info)=>{
+      setUpdatePanelStatus('Update downloaded. Restarting now...','success');
+      toast('Update downloaded. Restarting to install.', 'success');
+    });
+  }
+}
+
+async function checkForUpdatesOnStartup(){
+  if(!electronAvailable || !window.electronAPI || typeof window.electronAPI.isPackagedApp !== 'function') return;
+  try{
+    const isPackaged = await window.electronAPI.isPackagedApp();
+    if(!isPackaged) return;
+    const cfg = await window.electronAPI.getUpdateConfig();
+    const feedUrl=(cfg?.feedUrl||'').trim();
+    if(!feedUrl) return;
+    const res = await window.electronAPI.checkForAppUpdates();
+    if(res?.ok && res.updateAvailable){
+      toast(`New update available: version ${res.version}. Use CHECK FOR UPDATE button in nav bar.`, 'success');
+    }
+  }catch(_){
+    // Ignore silent startup update check failures.
   }
 }
 
@@ -1603,16 +3431,22 @@ function renderUpdatePanel(){
     downloadBtn.onclick=async ()=>{
       downloadBtn.disabled=true;
       downloadBtn.textContent='Downloading...';
+      showUpdateProgress(true);
+      const details=document.getElementById('update-progress-details');
+      if(details) details.textContent='Starting download...';
+      setUpdatePanelStatus('Starting update download...', 'success');
       const res=await window.electronAPI.downloadAppUpdate();
       if(res?.ok){
-        setUpdatePanelStatus('Update download started. You will be prompted when it finishes.', 'success');
+        setUpdatePanelStatus('Downloading update. Please wait...', 'success');
       } else {
         setUpdatePanelStatus(res?.message||'Download failed. Try again later.', 'danger');
+        showUpdateProgress(false);
+        downloadBtn.disabled=false;
+        downloadBtn.textContent='DOWNLOAD UPDATE';
       }
-      downloadBtn.disabled=false;
-      downloadBtn.textContent='DOWNLOAD UPDATE';
     };
   }
+  showUpdateProgress(false);
   setUpdatePanelStatus('Click CHECK FOR UPDATE to see whether a newer version is available.');
 }
 
@@ -1682,12 +3516,18 @@ function initApp(){
   if(changed)DB.setSales(sales);
   checkNet();populateProductDropdown();
   setDeleteReasonOptions('sale');
+  populateAuditReasonFilter();
   refreshSyncBadge();
+  updateWholesaleVisibility();
   renderDashboard();renderSessionTable();renderOutstanding();renderInventory();renderRecords();renderAudit();
-  if(navigator.onLine&&DB.getSyncQueue().length)syncToCloud(true);
   if(navigator.onLine){
-    // Do not auto-check updates on login. App update checks are manual only.
+    const hasPending=DB.getSyncQueue().length>0 || sales.some(s=>!s.synced);
+    if(hasPending){
+      toast('Resuming backup of offline data...','info');
+      syncToCloud(true);
+    }
   }
   startAutoSyncLoop();
   hideAppLoader();
+  renderOwnerProfile();
 }
