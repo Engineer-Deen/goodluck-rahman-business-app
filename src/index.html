@@ -88,7 +88,6 @@
             <button type="button" class="btn-wholesale-entry" onclick="switchLoginMode('wholesalePhone')">WHOLESALES</button>
             <button type="button" class="btn-wholesale-entry" onclick="switchLoginMode('adminLogin')">ADMIN</button>
           </div>
-          <div class="login-wholesale-foot-note">Wholesales and Admin access are separate from the main app.</div>
         </div>
       </div>
 
@@ -661,6 +660,10 @@
       <div class="card" id="admin-wholesale-admin-card">
         <div class="card-title">Wholesales Authorized Users</div>
         <p class="wholesale-admin-intro">Add phone numbers and emails that may receive a wholesale login code. These settings sync to Firebase Storage.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
+          <div style="font-size:.9rem;color:var(--text-secondary);">Total wholesale users: <strong id="admin-wholesale-user-count">0</strong></div>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="void loadWholesaleAdminUsers()">REFRESH LIST</button>
+        </div>
         <div class="wholesale-admin-form">
           <div class="form-group"><label>Mobile number</label>
             <div class="wholesale-phone-row wholesale-admin-phone-row">
@@ -674,6 +677,23 @@
         </div>
         <div id="wholesale-admin-status" class="wholesale-admin-status" aria-live="polite"></div>
         <ul id="wholesale-admin-user-list" class="wholesale-admin-user-list"></ul>
+      </div>
+      <div class="card" id="admin-delete-user-card">
+        <div class="card-title">Delete Main App User</div>
+        <p class="wholesale-admin-intro">Enter a registered main app user email to remove their profile and local data.</p>
+        <div class="form-group"><label>User email</label><input type="email" id="admin-delete-user-email" placeholder="user@example.com"></div>
+        <button type="button" class="btn btn-danger" onclick="void deleteMainAppUser()">DELETE USER</button>
+        <div id="admin-delete-user-status" class="wholesale-admin-status" aria-live="polite"></div>
+      </div>
+      <div class="card" id="admin-registered-users-card">
+        <div class="card-title">Registered Main App Users</div>
+        <p class="wholesale-admin-intro">View the emails of users who have registered accounts in this system.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+          <div style="font-size:.9rem;color:var(--text-secondary);">Total users: <strong id="admin-registered-user-count">0</strong></div>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="renderRegisteredUsersList()">REFRESH</button>
+        </div>
+        <ul id="admin-registered-users-list" class="admin-registered-users-list"></ul>
+        <div id="admin-registered-users-status" class="wholesale-admin-status" aria-live="polite"></div>
       </div>
       <div class="card">
         <div class="card-title">System Information</div>
