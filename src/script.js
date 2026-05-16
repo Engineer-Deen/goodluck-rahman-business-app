@@ -97,7 +97,7 @@ const WHOLESALE_USERS_CACHE_KEY='glr_wholesale_allowed_users_cache';
 const WHOLESALE_REGISTRY_FETCH_MS=2500;
 const WHOLESALE_REGISTRY_TTL_MS=60*1000;
 const WHOLESALE_EMAIL_FETCH_MS=8000;
-const MSG_WHOLESALE_NOT_REGISTERED='This phone number or email address is not registered yet. Ask your administrator to add you in the main app: Profile → Wholesales authorized users.';
+const MSG_WHOLESALE_NOT_REGISTERED='This phone number or email address is not registered yet. contact your administrator';
 /**
  * Email delivery for wholesales OTP (all free tiers, no credit card).
  * mode: 'auto' | 'emailjs' | 'firebase' | 'dev'
@@ -140,6 +140,7 @@ const OWNER_PIN_KEY='glr_owner_pin';
 const OWNER_PHONE_KEY='glr_owner_phone';
 const EXPLICIT_LOGOUT_KEY='glr_explicit_logout';
 const OWNER_PROFILE_KEY='glr_owner_profile';
+const ACCOUNT_INDEX_KEY='glr_account_index';
 const SYNC_URL_KEY='glr_sync_url';
 const UPDATE_URL_HELP='Example: https://goodluckrahmanenterprise.netlify.app/';
 let syncDebounceTimer=null;
@@ -179,6 +180,7 @@ function getOwnerProfileData(accountEmail){
 function saveOwnerProfile(email, fullName, contact, photo, provider='local'){
   const normalized=(email||'').toLowerCase().trim();
   const profile = getOwnerProfileData(normalized);
+  const oldEmail = profile.email ? normalizeAccountId(profile.email) : '';
   const defaultName = 'User';
   let name = defaultName;
   if(fullName?.trim()){
@@ -205,11 +207,122 @@ function saveOwnerProfile(email, fullName, contact, photo, provider='local'){
   } else {
     DB.deleteScoped('owner_photo', normalized);
   }
+  if(normalized && oldEmail && oldEmail !== normalized){
+    updateRegisteredAccountIndex(oldEmail, false);
+  }
+  updateRegisteredAccountIndex(normalized, true);
   return saved;
 }
 function titleCase(value){
   if(!value) return '';
   return value.toString().trim().split(/\s+/).map(word=>word.charAt(0).toUpperCase()+word.slice(1).toLowerCase()).join(' ');
+}
+function removeMainAppUser(email){
+  const normalized = normalizeAccountId(email);
+  if(!normalized) return false;
+  const profile = getOwnerProfileData(normalized);
+  if(!profile || !profile.email) return false;
+  if(getCurrentAccount() === normalized){
+    setCurrentAccount('');
+  }
+  DB.deleteScoped(OWNER_PROFILE_KEY, normalized);
+  DB.deleteScoped(USER_PASSWORD_KEY, normalized);
+  DB.deleteScoped(OWNER_PIN_KEY, normalized);
+  DB.deleteScoped(OWNER_PHONE_KEY, normalized);
+  DB.deleteScoped('owner_photo', normalized);
+  DB.deleteScoped('glr_sales', normalized);
+  DB.deleteScoped('glr_inventory', normalized);
+  DB.deleteScoped('glr_audit', normalized);
+  DB.deleteScoped('glr_sync_queue', normalized);
+  DB.deleteScoped('glr_sync_state', normalized);
+  updateRegisteredAccountIndex(normalized, false);
+  return true;
+}
+function getRegisteredAccountIndex(){
+  const index=DB.get(ACCOUNT_INDEX_KEY);
+  if(Array.isArray(index)){
+    return index.map(normalizeAccountId).filter(Boolean);
+  }
+  return [];
+}
+function saveRegisteredAccountIndex(accounts){
+  const normalized=(Array.isArray(accounts)?accounts:[]).map(normalizeAccountId).filter(Boolean);
+  if(normalized.length){
+    DB.set(ACCOUNT_INDEX_KEY,[...new Set(normalized)]);
+  } else {
+    DB.delete(ACCOUNT_INDEX_KEY);
+  }
+  return getRegisteredAccountIndex();
+}
+function updateRegisteredAccountIndex(email, shouldAdd=true){
+  const normalized=normalizeAccountId(email);
+  if(!normalized) return;
+  const accounts=getRegisteredAccountIndex();
+  const exists=accounts.includes(normalized);
+  if(shouldAdd && !exists){
+    accounts.push(normalized);
+    saveRegisteredAccountIndex(accounts);
+  }
+  if(!shouldAdd && exists){
+    saveRegisteredAccountIndex(accounts.filter(a=>a!==normalized));
+  }
+}
+function scanLocalRegisteredAccounts(){
+  const accounts=[];
+  if(typeof localStorage === 'undefined') return accounts;
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const key=localStorage.key(i);
+      if(!key || typeof key !== 'string') continue;
+      if(key.startsWith(`${OWNER_PROFILE_KEY}::`)){
+        const email=normalizeAccountId(key.split('::')[1] || '');
+        if(email && !accounts.includes(email)) accounts.push(email);
+      }
+    }
+  }catch(_e){}
+  return accounts;
+}
+function getRegisteredAppUsers(){
+  const indexed=getRegisteredAccountIndex();
+  const scanned=scanLocalRegisteredAccounts();
+  return [...new Set([...indexed, ...scanned])].sort();
+}
+function renderRegisteredUsersList(){
+  const listEl=document.getElementById('admin-registered-users-list');
+  const countEl=document.getElementById('admin-registered-user-count');
+  const statusEl=document.getElementById('admin-registered-users-status');
+  if(!listEl || !countEl) return;
+  const users=getRegisteredAppUsers();
+  countEl.textContent = users.length;
+  if(!users.length){
+    listEl.innerHTML = '<li class="wholesale-admin-user-item"><span class="wholesale-admin-user-meta">No registered users found. Create or sync at least one account first.</span></li>';
+    if(statusEl) statusEl.textContent = 'Registered user list is built from stored owner profiles and may require browser storage access.';
+    return;
+  }
+  listEl.innerHTML = users.map(email => `<li class="wholesale-admin-user-item"><span class="wholesale-admin-user-meta">${email}</span></li>`).join('');
+  if(statusEl) statusEl.textContent = 'Registered user accounts loaded successfully.';
+}
+function deleteMainAppUser(){
+  const emailEl=document.getElementById('admin-delete-user-email');
+  const statusEl=document.getElementById('admin-delete-user-status');
+  if(statusEl){ statusEl.textContent=''; statusEl.style.color=''; }
+  const email = normalizeEmail((emailEl||{}).value);
+  if(!email){
+    if(statusEl){ statusEl.textContent='Enter the email address of the user to delete.'; statusEl.style.color='var(--danger)'; }
+    return;
+  }
+  const profile = getOwnerProfileData(email);
+  if(!profile || !profile.email){
+    if(statusEl){ statusEl.textContent='This user does not exist.'; statusEl.style.color='var(--danger)'; }
+    return;
+  }
+  const deleted = removeMainAppUser(email);
+  if(deleted){
+    if(statusEl){ statusEl.textContent='User deleted successfully.'; statusEl.style.color='var(--success)'; }
+    if(emailEl) emailEl.value='';
+  } else {
+    if(statusEl){ statusEl.textContent='Unable to delete this user.'; statusEl.style.color='var(--danger)'; }
+  }
 }
 function renderOwnerProfile(){
   const profile=getOwnerProfileData();
@@ -285,6 +398,7 @@ async function loadAdminPanel(){
   
   await refreshWholesaleRegisteredUsers();
   if(wholesaleCount) wholesaleCount.textContent=(wholesaleRegisteredUsers||[]).length;
+  renderRegisteredUsersList();
   
   const lastSyncTime=DB.get('glr_last_sync_time');
   if(lastSync){
@@ -689,10 +803,11 @@ function renderWholesaleAdminUserList(){
   });
 }
 async function loadWholesaleAdminUsers(){
-  if(!profileAccessUnlocked) return;
   await refreshWholesaleRegisteredUsers();
   wholesaleAdminUsersCache=(wholesaleRegisteredUsers||[]).slice();
   renderWholesaleAdminUserList();
+  const countEl=document.getElementById('admin-wholesale-user-count');
+  if(countEl) countEl.textContent = wholesaleAdminUsersCache.length;
   if(!firebaseStore){
     setWholesaleAdminStatus('Cloud database offline — users added here will not sync until Firebase is available.',true);
   }else{
@@ -828,12 +943,10 @@ function hasWholesaleRegistryConfigured(){
 function findWholesaleRegisteredUser(phone,email){
   const e=normalizeEmail(email);
   const p=normalizePhone(String(phone||''));
-  if(!e && !p) return null;
-  return (wholesaleRegisteredUsers||[]).find(u=>{
-    const matchEmail = e && u.email===e;
-    const matchPhone = p && wholesalePhonesMatch(u.phone,p);
-    return matchEmail || matchPhone;
-  })||null;
+  if(!e || !p) return null;
+  const hasEmail = (wholesaleRegisteredUsers||[]).some(u=>u.email===e);
+  const hasPhone = (wholesaleRegisteredUsers||[]).some(u=>wholesalePhonesMatch(u.phone,p));
+  return hasEmail && hasPhone ? { phone:p, email:e } : null;
 }
 function generateWholesaleOtpCode(){
   return String(Math.floor(100000+Math.random()*900000));
@@ -856,7 +969,7 @@ Use this one-time verification code to open the Wholesales section. It expires i
 </div>
 </td></tr>
 <tr><td style="padding:0 32px 28px;text-align:center;color:#868e96;font-size:12px;line-height:1.5;">
-If you did not request this code, you can ignore this email. Only registered phone numbers or email addresses can sign in.
+If you did not request this code, you can ignore this email. Only registered phone numbers and email addresses can sign in.
 </td></tr>
 <tr><td style="padding:16px 32px 24px;text-align:center;border-top:1px solid rgba(255,255,255,0.08);color:#495057;font-size:11px;">
 &copy; ${new Date().getFullYear()} ${brand}
