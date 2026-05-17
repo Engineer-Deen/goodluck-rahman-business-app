@@ -302,7 +302,7 @@ function renderRegisteredUsersList(){
   listEl.innerHTML = users.map(email => `<li class="wholesale-admin-user-item"><span class="wholesale-admin-user-meta">${email}</span></li>`).join('');
   if(statusEl) statusEl.textContent = 'Registered user accounts loaded successfully.';
 }
-function deleteMainAppUser(){
+async function deleteMainAppUser(){
   const emailEl=document.getElementById('admin-delete-user-email');
   const statusEl=document.getElementById('admin-delete-user-status');
   if(statusEl){ statusEl.textContent=''; statusEl.style.color=''; }
@@ -320,6 +320,11 @@ function deleteMainAppUser(){
   if(deleted){
     if(statusEl){ statusEl.textContent='User deleted successfully.'; statusEl.style.color='var(--success)'; }
     if(emailEl) emailEl.value='';
+    const normalizedCurrent = normalizeAccountId(getCurrentAccount() || getCurrentUser()?.email);
+    if(normalizedCurrent && normalizedCurrent === normalized){
+      toast('Deleted user has been signed out.', 'info');
+      await doLogout(true);
+    }
   } else {
     if(statusEl){ statusEl.textContent='Unable to delete this user.'; statusEl.style.color='var(--danger)'; }
   }
@@ -588,7 +593,7 @@ function updateOwnerDisplayName(){
   renderOwnerProfile();
   toast('Owner name updated successfully.', 'success');
 }
-function updateAppPin(){
+async function updateAppPin(){
   const currentPin=(document.getElementById('profile-current-pin')||{}).value?.trim();
   const newPin=(document.getElementById('profile-new-pin')||{}).value?.trim();
   if(!currentPin || !newPin){
@@ -604,6 +609,13 @@ function updateAppPin(){
     return;
   }
   setOwnerPin(newPin);
+  if(getCurrentUser()){
+    try{
+      await saveUserDataToFirestore();
+    }catch(_e){
+      // Local PIN is updated; cloud sync will retry later when possible.
+    }
+  }
   document.getElementById('profile-current-pin').value='';
   document.getElementById('profile-new-pin').value='';
   toast('Unlock PIN changed successfully.', 'success');
@@ -1228,6 +1240,7 @@ function setLoginMode(mode){
   if(forgotPin) forgotPin.style.display = mode === 'forgotPin' ? 'block' : 'none';
   if(wholesalePhoneMode) wholesalePhoneMode.style.display = mode === 'wholesalePhone' ? 'block' : 'none';
   if(backButton) backButton.style.display = mode === 'login' || mode === 'register' || mode === 'adminLogin' ? 'inline-flex' : 'none';
+  if(mode !== 'welcome') hideAdminSecretButton();
   const otpSection=document.getElementById('login-otp-section');
   if(otpSection) otpSection.style.display = 'none';
   const codeHint=document.getElementById('login-code-hint');
@@ -1505,6 +1518,8 @@ let firebaseStorage=null;
 let authUser=null;
 let ownerEmailConfig=null;
 let adminLoginVerified=false;
+let adminSecretClickCount=0;
+let adminSecretTimer=null;
 const ADMIN_EMAIL='abduldeenkamara06@gmail.com';
 const ADMIN_PASSWORD='10737';
 const AUTO_SYNC_INTERVAL_MS=30000;
@@ -1528,6 +1543,36 @@ function initFirebase(){
     authUser=user;
     if(user){
       await handleUserSignedIn(user);
+    }
+  });
+}
+
+function showAdminSecretButton(){
+  const btn=document.getElementById('admin-secret-button');
+  if(btn) btn.style.display='inline-flex';
+}
+function hideAdminSecretButton(){
+  const btn=document.getElementById('admin-secret-button');
+  if(btn) btn.style.display='none';
+}
+function setupAdminSecretAccess(){
+  const banner=document.querySelector('.login-banner');
+  if(banner){
+    banner.addEventListener('click',()=>{
+      adminSecretClickCount++;
+      if(adminSecretTimer) clearTimeout(adminSecretTimer);
+      adminSecretTimer=setTimeout(()=>{ adminSecretClickCount=0; }, 5000);
+      if(adminSecretClickCount >= 5){
+        showAdminSecretButton();
+        toast('Admin access unlocked. Click ADMIN to open the admin login.', 'success');
+        adminSecretClickCount = 0;
+      }
+    });
+  }
+  window.addEventListener('keydown', e=>{
+    if(e.ctrlKey && e.altKey && e.shiftKey && e.key.toLowerCase() === 'a'){
+      showAdminSecretButton();
+      toast('Admin access revealed. Click ADMIN to open the admin login.', 'success');
     }
   });
 }
@@ -1647,6 +1692,12 @@ async function handleUserSignedIn(user){
 async function saveUserDataToFirestore(){
   const user=getCurrentUser();
   if(!user||!firebaseStore) return;
+  const normalized=normalizeAccountId(user.email);
+  const profile=getOwnerProfileData(normalized);
+  const existingPin = DB.getScoped(OWNER_PIN_KEY, normalized);
+  if(existingPin){
+    profile.pin = existingPin;
+  }
   const docRef=firebaseStore.collection('users').doc(user.uid);
   await docRef.set({
     email:user.email,
@@ -1654,13 +1705,16 @@ async function saveUserDataToFirestore(){
     sales:DB.getSales(),
     inventory:DB.getInventory(),
     audit:DB.getAudit(),
-    profile:getOwnerProfileData(),
+    profile,
+    syncQueue:DB.getSyncQueue(),
+    syncState:DB.getSyncState(),
   },{merge:true});
 }
 
 async function loadUserDataFromFirestore(){
   const user=getCurrentUser();
   if(!user||!firebaseStore) return;
+  const normalized=normalizeAccountId(user.email);
   const doc=await firebaseStore.collection('users').doc(user.uid).get();
   if(!doc.exists) return;
   const data=doc.data();
@@ -1673,6 +1727,15 @@ async function loadUserDataFromFirestore(){
   if(data.audit) DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, pendingAuditIds));
   const hasPendingProfileUpdate = queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo');
   if(data.profile && !hasPendingProfileUpdate) DB.setScoped(OWNER_PROFILE_KEY, data.profile);
+  if(data.profile?.pin){
+    setOwnerPin(data.profile.pin, normalized);
+  }
+  if(data.pin){
+    setOwnerPin(data.pin, normalized);
+  }
+  if(data.syncState){
+    DB.setSyncState(data.syncState);
+  }
   refreshSyncBadge();
   renderOwnerProfile();
 }
@@ -1756,11 +1819,21 @@ function mergeRemoteRecords(localRecords, remoteRecords, pendingIds){
 function refreshSyncBadge(){
   const badge=document.getElementById('pending-sync-badge');
   if(!badge)return;
+  if(syncInProgress){
+    badge.textContent='Syncing...';
+    badge.className='badge badge-pending';
+    return;
+  }
   const queueCount=DB.getSyncQueue().length;
   const pendingSales=DB.getSales().filter(s=>!s.synced).length;
   const pending=queueCount||pendingSales;
-  badge.textContent=`${pending} pending`;
-  badge.className=`badge ${pending?'badge-pending':'badge-synced'}`;
+  if(pending){
+    badge.textContent=`${pending} pending`;
+    badge.className='badge badge-pending';
+  } else {
+    badge.textContent='Synced';
+    badge.className='badge badge-synced';
+  }
 }
 
 function normalizeAuditEntries(){
@@ -1833,6 +1906,7 @@ async function doLogin(){
   await new Promise(requestAnimationFrame);
   const profile=getOwnerProfileData();
   const isRegisteredEmail = profile.email.toLowerCase()===email.toLowerCase();
+  const localAuth = localAuthenticate(email,password);
   if(firebaseAuth){
     if(!navigator.onLine){
       el.textContent = 'Internet is required to log in with email and password. Use PIN unlock when offline.';
@@ -1846,6 +1920,24 @@ async function doLogin(){
       return;
     }catch(err){
       console.error(err);
+      if(err?.code === 'auth/user-not-found' && localAuth){
+        try{
+          justLoggedIn=true;
+          await firebaseSignUp(email,password);
+          setCurrentAccount(email);
+          toast('Account created in Firebase and signed in successfully.','success');
+          return;
+        }catch(signUpErr){
+          console.error('Auto Firebase sign-up failed:', signUpErr);
+          if(signUpErr?.code === 'auth/email-already-in-use'){
+            el.textContent = 'This email already exists in Firebase. Please sign in manually.';
+          } else {
+            el.textContent = 'Unable to complete remote sign-in. Please try again later.';
+          }
+          if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
+          return;
+        }
+      }
       let message = 'Login failed. Please check your email and password.';
       if(err?.code === 'auth/wrong-password'){
         message = 'Incorrect password. Please try again.';
@@ -1861,7 +1953,7 @@ async function doLogin(){
       return;
     }
   }
-  if(localAuthenticate(email,password)){
+  if(localAuth){
     justLoggedIn=true;
     setCurrentAccount(email);
     setExplicitLogout(false);
@@ -1958,48 +2050,6 @@ async function doRegister(){
   }
   await new Promise(requestAnimationFrame);
   const photo=pendingRegistrationPhoto || '';
-  if(firebaseAuth){
-    if(!navigator.onLine){
-      el.textContent = 'Internet is required to create an account. Please connect to the internet and try again.';
-      if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
-      return;
-    }
-    try{
-      justLoggedIn=true;
-      const userCredential=await firebaseSignUp(email,password);
-      const user=userCredential.user;
-      if(user){
-        DB.setSales([]);
-        DB.setAudit([]);
-        DB.setInventory([]);
-        setDefaultInventory();
-        saveOwnerProfile(email, ownerName, contact, photo, 'email');
-        setUserPassword(password);
-        setOwnerPin(pin);
-        setExplicitLogout(false);
-        await saveUserDataToFirestore();
-        document.getElementById('login-overlay').style.display='none';
-        document.getElementById('app').style.display='flex';
-        initApp();
-        return;
-      }
-    }catch(err){
-      console.error(err);
-      let message = 'Registration failed. Please try again.';
-      if(err?.code === 'auth/email-already-in-use'){
-        message = 'Email is already registered. Please log in or reset your password.';
-      } else if(err?.code === 'auth/invalid-email'){
-        message = 'Please enter a valid email address.';
-      } else if(err?.code === 'auth/weak-password'){
-        message = 'Password is too weak. Please use at least 6 characters.';
-      } else if(isFirebaseNetworkError(err)){
-        message = 'Unable to connect to the internet. Please check your connection and try again.';
-      }
-      el.textContent=message;
-      if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
-      return;
-    }
-  }
   const existing=DB.getScoped(OWNER_PROFILE_KEY, email);
   if(existing && existing.email){
     el.textContent='A user is already registered. Please log in.';
@@ -2007,6 +2057,32 @@ async function doRegister(){
     return;
   }
   saveLocalRegistration(email, ownerName, contact, password, pin, photo);
+  if(firebaseAuth && navigator.onLine){
+    try{
+      justLoggedIn=true;
+      const userCredential=await firebaseSignUp(email,password);
+      const user=userCredential.user;
+      if(user){
+        await saveUserDataToFirestore();
+        toast('Account created and synced successfully.', 'success');
+      }
+    }catch(err){
+      console.error(err);
+      if(err?.code === 'auth/email-already-in-use'){
+        toast('Account created locally. Firebase account already exists for this email.', 'warning');
+      } else if(err?.code === 'auth/invalid-email'){
+        toast('Account created locally. Remote sync failed: invalid email.', 'warning');
+      } else if(err?.code === 'auth/weak-password'){
+        toast('Account created locally. Remote sync failed: weak password.', 'warning');
+      } else if(isFirebaseNetworkError(err)){
+        toast('Account created locally. Remote sync will continue when the internet returns.', 'warning');
+      } else {
+        toast('Account created locally. Remote sync failed and will retry later.', 'warning');
+      }
+    }
+  } else if(firebaseAuth){
+    toast('Account created locally. Remote sync will continue when the internet returns.', 'warning');
+  }
   if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
 }
 
@@ -2064,7 +2140,7 @@ const INVENTORY_DELETE_REASONS=[
   'Mistake Made',
 ];
 
-async function doLogout(){
+async function doLogout(force=false){
   try{
     await firebaseSignOut();
   }catch(_e){}
@@ -2072,7 +2148,7 @@ async function doLogout(){
   wholesaleBrowseWithoutLogin=false;
   adminLoginVerified=false;
   DB.delete(WHOLESALE_ACCESS_KEY);
-  setExplicitLogout(true);
+  if(!force) setExplicitLogout(true);
   profileAccessUnlocked=false;
   document.getElementById('app').style.display='none';
   document.getElementById('login-overlay').style.display='flex';
@@ -2126,6 +2202,14 @@ function showPanel(id){
   if(wholesaleNav) wholesaleNav.style.display = id === 'wholesale' ? 'flex' : 'none';
   if(profileAvatar) profileAvatar.style.display = hideHeaderExtras ? 'none' : '';
   if(updateButton) updateButton.style.display = hideHeaderExtras ? 'none' : '';
+  if(id==='admin' && !adminLoginVerified){
+    setLoginMode('adminLogin');
+    return;
+  }
+  if(id==='admin' && !adminLoginVerified){
+    setLoginMode('adminLogin');
+    return;
+  }
   if(id==='dashboard')renderDashboard();
   if(id==='records')renderRecords();
   if(id==='payment')renderOutstanding();
@@ -2455,6 +2539,7 @@ function startupInitialize(){
   initLoginScreen();
   renderOwnerProfile();
   setupUpdateEventHandlers();
+  setupAdminSecretAccess();
   checkForUpdatesOnStartup();
   const overlay=document.getElementById('login-overlay');
   if(overlay) overlay.style.display='flex';
@@ -2530,18 +2615,18 @@ function checkNet(){
   return online;
 }
 async function ensureCloudAccountForLocalUser(){
-  if(!navigator.onLine || !firebaseAuth) return;
+  if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()) return;
   if(getCurrentUser()) return;
   const primary=getPrimaryAccountEmail();
   const profile=primary?getOwnerProfileData(primary):getOwnerProfileData();
-  if(profile.authProvider !== 'local') return;
+  if(!profile.email) return;
   const password=getUserPassword(profile.email);
-  if(!profile.email || !password) return;
+  if(!password) return;
   try{
     await firebaseSignIn(profile.email,password);
     return;
   }catch(err){
-    if(err?.code === 'auth/user-not-found'){
+    if(err?.code === 'auth/user-not-found' && profile.authProvider === 'local'){
       try{
         await firebaseSignUp(profile.email,password);
         toast('Local account synced to Firebase successfully.','success');
@@ -2550,6 +2635,8 @@ async function ensureCloudAccountForLocalUser(){
           toast('This email already exists in Firebase. Please sign in manually.','warning');
         }
       }
+    } else if(err?.code === 'auth/wrong-password'){
+      toast('Unable to sync offline data to Firebase because stored password is invalid. Please sign in manually once online.','warning');
     }
   }
 }
@@ -3307,11 +3394,12 @@ async function syncToCloud(silent=false){
     if(!silent)toast('No internet. Data saved locally. Will sync when connected.','warning');
     return false;
   }
+  await ensureCloudAccountForLocalUser();
   const syncUrl=getSyncUrl();
   const user=getCurrentUser();
   const canSaveFirestore=!!user && !!firebaseStore;
   if(!syncUrl && !canSaveFirestore){
-    if(!silent)toast('Backup not configured. Please set up cloud backup in settings.','warning');
+    if(!silent)toast('Cloud backup is not configured. Please sign in to Firebase or configure backup in Settings.','warning');
     return false;
   }
   const queue=DB.getSyncQueue();
@@ -3330,6 +3418,7 @@ async function syncToCloud(silent=false){
     },
   };
   syncInProgress=true;
+  refreshSyncBadge();
   let googleSheetSuccess=false;
   let firestoreSuccess=false;
   let syncErrors=[];
