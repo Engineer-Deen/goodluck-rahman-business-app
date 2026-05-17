@@ -86,7 +86,7 @@
         <div class="login-wholesale-foot" style="display:flex;flex-direction:column;gap:0.75rem;align-items:center;">
           <div style="display:flex;gap:0.75rem;flex-wrap:wrap;justify-content:center;">
             <button type="button" class="btn-wholesale-entry" onclick="switchLoginMode('wholesalePhone')">WHOLESALES</button>
-            <button type="button" class="btn-wholesale-entry" onclick="switchLoginMode('adminLogin')">ADMIN</button>
+            <button type="button" class="btn-wholesale-entry" id="admin-secret-button" style="display:none;" onclick="switchLoginMode('adminLogin')">ADMIN</button>
           </div>
         </div>
       </div>
@@ -312,13 +312,14 @@
       </div>
       <div>
         <div class="brand-name">GOOD LUCK RAHMAN ENTERPRISE</div>
-        <div class="brand-tagline">Management System · V4.0</div>
+        <div class="brand-tagline">Management System · V4.2</div>
       </div>
     </div>
     <div class="header-right">
       <div class="sync-status">
         <div class="sync-dot" id="net-dot"></div>
         <span id="net-label">Offline</span>
+        <span id="pending-sync-badge" class="badge badge-synced">0 pending</span>
       </div>
       <button class="btn-header" onclick="checkAppUpdate()">CHECK FOR UPDATE</button>
       <button class="btn-logout" onclick="doLogout()">LOGOUT</button>
