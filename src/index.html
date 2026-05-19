@@ -321,7 +321,7 @@
         <span id="net-label">Offline</span>
         <span id="pending-sync-badge" class="badge badge-synced">0 pending</span>
       </div>
-      <button class="btn-header" onclick="checkAppUpdate()">CHECK FOR UPDATE</button>
+      <button class="btn-header" onclick="openUpdateModal()">CHECK FOR UPDATE</button>
       <button class="btn-logout" onclick="doLogout()">LOGOUT</button>
     </div>
   </header>
@@ -840,6 +840,27 @@
 </div>
 
 <div id="toast"></div>
+
+<!-- UPDATE MANAGER MODAL -->
+<div class="modal-overlay" id="update-modal-overlay">
+  <div class="modal">
+    <button class="modal-close" onclick="closeUpdateModal()" aria-label="Close update window">×</button>
+    <div class="modal-title">App Update Manager</div>
+    <div class="form-group" style="margin-bottom:1rem;">
+      <strong>Current version:</strong> <span id="current-app-version">Loading...</span>
+    </div>
+    <div id="update-modal-status" style="margin-bottom:1rem;color:var(--text-secondary);font-size:.95rem;">Open this dialog and click CHECK FOR UPDATE to see if a new version is available.</div>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem;">
+      <button class="btn btn-primary" id="check-update-btn" type="button" onclick="performUpdateCheck()">CHECK FOR UPDATE</button>
+      <button class="btn btn-secondary" id="download-update-btn" type="button" style="display:none;">DOWNLOAD UPDATE</button>
+    </div>
+    <div class="update-progress-wrapper" id="update-progress-wrapper" style="display:none;margin-top:1rem;">
+      <div class="update-progress-bar" id="update-progress-bar"></div>
+      <div class="update-progress-details" id="update-progress-details">Waiting to download...</div>
+      <div class="update-progress-summary" id="update-progress-summary"></div>
+    </div>
+  </div>
+</div>
 
 <!-- ADMIN LOGIN MODAL -->
 <div class="modal-overlay" id="modal-admin-login" style="display:none;">
