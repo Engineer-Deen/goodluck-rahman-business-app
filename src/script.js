@@ -50,8 +50,14 @@ const DB={
   setSales(v, accountEmail){this.setScoped('glr_sales',v, accountEmail);},
   getAudit(accountEmail){return this.getScoped('glr_audit', accountEmail)||[];},
   setAudit(v, accountEmail){this.setScoped('glr_audit',v, accountEmail);},
-  getInventory(accountEmail){return this.getScoped('glr_inventory', accountEmail)||[];},
-  setInventory(v, accountEmail){this.setScoped('glr_inventory',v, accountEmail);},
+  getInventory(accountEmail){
+    const globalInventory = this.get('glr_inventory');
+    if(Array.isArray(globalInventory)) return globalInventory;
+    return this.getScoped('glr_inventory', accountEmail)||[];
+  },
+  setInventory(v, accountEmail){
+    this.set('glr_inventory', v);
+  },
   getSyncQueue(accountEmail){return this.getScoped('glr_sync_queue', accountEmail)||[];},
   setSyncQueue(v, accountEmail){this.setScoped('glr_sync_queue',v, accountEmail);},
   getSyncState(accountEmail){return this.getScoped('glr_sync_state', accountEmail)||{};},
@@ -79,7 +85,6 @@ const FIRESTORE_CONFIG_COLLECTION='meta';
 const FIRESTORE_CONFIG_DOC='appConfig';
 const DEFAULT_OWNER_PHOTO='assets/login-photo.png';
 const USER_PASSWORD_KEY='glr_user_password';
-const FIREBASE_RESET_URL='https://my-desktop-app-4ee05.web.app/?mode=resetPassword';
 /** Persists successful Wholesales email gate until logout. */
 const WHOLESALE_ACCESS_KEY='glr_wholesale_email_access';
 /**
@@ -122,6 +127,20 @@ const WHOLESALE_EMAIL_DELIVERY={
     templateId:'template_3aa2wd6',
   },
 };
+const PASSWORD_RESET_EMAIL_DELIVERY={
+  enabled:true,
+  mode:'firebase',
+  brandName:'Good Luck Rahman Enterprise',
+  websiteLink:'',
+  logoUrl:'',
+  continueUrl:'',
+  emailjs:{
+    enabled:true,
+    publicKey:'UCXgLqGeMlxHl_pEh',
+    serviceId:'service_ra3qu89',
+    templateId:'template_a6eh4z6',
+  },
+};
 const WHOLESALE_OTP_TTL_MS=10*60*1000;
 const WHOLESALE_OTP_RESEND_MS=60*1000;
 /** Country prefix for the wholesale phone field when users enter local digits only (Sierra Leone). */
@@ -151,6 +170,7 @@ let justLoggedIn=false;
 let lastNetworkOnline=null;
 let pendingRegistrationPhoto=null;
 let profileAccessUnlocked=false;
+let currentPanelId='welcome';
 /** True when user opened wholesale from the login welcome CTA (show nav tab before full auth). */
 let wholesaleBrowseWithoutLogin=false;
 let wholesaleRegisteredUsers=[];
@@ -231,7 +251,6 @@ function removeMainAppUser(email){
   DB.deleteScoped(OWNER_PHONE_KEY, normalized);
   DB.deleteScoped('owner_photo', normalized);
   DB.deleteScoped('glr_sales', normalized);
-  DB.deleteScoped('glr_inventory', normalized);
   DB.deleteScoped('glr_audit', normalized);
   DB.deleteScoped('glr_sync_queue', normalized);
   DB.deleteScoped('glr_sync_state', normalized);
@@ -1061,6 +1080,88 @@ async function sendWholesaleOtpViaEmailJS(toEmail,code){
     throw new Error(detail||'EmailJS delivery failed');
   }
 }
+function getPasswordResetEmailContent(code){
+  const brand=PASSWORD_RESET_EMAIL_DELIVERY.brandName||'Good Luck Rahman Enterprise';
+  const expiresAt=Date.now()+10*60*1000;
+  const expiryLabel=formatWholesaleOtpExpiryTime(expiresAt);
+  const safeCode=String(code).replace(/[^\d]/g,'');
+  return {
+    subject:`${brand} — Password reset code`,
+    text:`Your ${brand} password reset code is ${safeCode}. It expires at ${expiryLabel}. If you did not request this, ignore this email.`,
+    html:`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#f7f8fb;font-family:Segoe UI,Arial,sans-serif;color:#333;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;padding:24px;">
+<tr><td style="background:#ffffff;border-radius:16px;border:1px solid rgba(0,0,0,0.06);padding:28px;">
+  <div style="font-size:13px;letter-spacing:0.16em;text-transform:uppercase;color:#6c757d;margin-bottom:12px;">Password Reset</div>
+  <h1 style="margin:0 0 16px;font-size:24px;color:#111;font-weight:700;">${brand}</h1>
+  <p style="margin:0 0 18px;line-height:1.6;color:#4d5761;">Use the code below to reset your account password in the app. It expires at <strong>${expiryLabel}</strong>.</p>
+  <div style="display:inline-flex;padding:18px 26px;border-radius:14px;background:#f1f4ff;border:1px solid rgba(75,104,255,0.16);margin-bottom:24px;">
+    <span style="font-size:34px;letter-spacing:10px;font-weight:700;color:#3341a1;font-family:Consolas,monospace;">${safeCode}</span>
+  </div>
+  <p style="margin:0;color:#6c757d;line-height:1.6;">If you did not request this code, you can ignore this email. Do not share the code with anyone.</p>
+  <div style="margin-top:26px;font-size:12px;color:#9aa0b1;line-height:1.5;">&copy; ${new Date().getFullYear()} ${brand}</div>
+</td></tr>
+</table></body></html>`,
+    expiryLabel,
+  };
+}
+function getPasswordResetEmailJsTemplateParams(toEmail,code){
+  const brand=PASSWORD_RESET_EMAIL_DELIVERY.brandName||'Good Luck Rahman Enterprise';
+  const { subject, text, html, expiryLabel } = getPasswordResetEmailContent(code);
+  const websiteLink=String(PASSWORD_RESET_EMAIL_DELIVERY.websiteLink||'').trim();
+  const logoUrl=String(PASSWORD_RESET_EMAIL_DELIVERY.logoUrl||'').trim() || websiteLink;
+  return {
+    email:toEmail,
+    to_email:toEmail,
+    user_email:toEmail,
+    subject,
+    passcode:code,
+    time:expiryLabel,
+    company_name:brand,
+    website_link:websiteLink,
+    link:websiteLink,
+    logo_url:logoUrl,
+    message:text,
+    html_message:html,
+  };
+}
+function isPasswordResetEmailJsReady(){
+  const root=PASSWORD_RESET_EMAIL_DELIVERY||{};
+  if(root.enabled===false) return false;
+  const cfg=root.emailjs||{};
+  if(cfg.enabled===false) return false;
+  return !!(cfg.publicKey&&cfg.serviceId&&cfg.templateId);
+}
+async function sendPasswordResetEmailViaEmailJS(toEmail,code){
+  if(!isPasswordResetEmailJsReady()){
+    throw new Error('EmailJS is not configured for password reset.');
+  }
+  const cfg=(PASSWORD_RESET_EMAIL_DELIVERY.emailjs||{});
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),WHOLESALE_EMAIL_FETCH_MS):null;
+  let res;
+  try{
+    res=await fetch('https://api.emailjs.com/api/v1.0/email/send',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller?.signal,body:JSON.stringify({service_id:cfg.serviceId,template_id:cfg.templateId,user_id:cfg.publicKey,template_params:getPasswordResetEmailJsTemplateParams(toEmail,code),}),});
+  }finally{
+    if(timer) clearTimeout(timer);
+  }
+  if(!res.ok){
+    const detail=await res.text().catch(()=>'');
+    throw new Error(detail||'EmailJS delivery failed');
+  }
+}
+async function sendPasswordResetEmailViaFirebase(toEmail){
+  if(!firebaseAuth || !isFirebaseConfigured()){
+    throw new Error('Firebase is not configured for password reset.');
+  }
+  const actionCodeSettings={};
+  const continueUrl=String(PASSWORD_RESET_EMAIL_DELIVERY.continueUrl||'').trim();
+  if(continueUrl){
+    actionCodeSettings.url=continueUrl;
+    actionCodeSettings.handleCodeInApp=false;
+  }
+  return continueUrl
+    ? firebaseAuth.sendPasswordResetEmail(toEmail, actionCodeSettings)
+    : firebaseAuth.sendPasswordResetEmail(toEmail);
+}
 async function sendWholesaleOtpEmail(toEmail,code){
   const mode=WHOLESALE_EMAIL_DELIVERY.mode||'auto';
   const tryFirebase=mode==='auto'||mode==='firebase';
@@ -1283,6 +1384,15 @@ function initLoginScreen(){
     setLoginMode('welcome');
   }
 }
+async function showAppAndInit(nextPanel='dashboard'){
+  document.getElementById('login-overlay').style.display='none';
+  document.getElementById('app').style.display='flex';
+  await new Promise(requestAnimationFrame);
+  initApp();
+  if(nextPanel){
+    showPanel(nextPanel);
+  }
+}
 function switchLoginMode(mode){
   resetAuthButtons();
   setExplicitLogout(true);
@@ -1377,40 +1487,27 @@ async function doPasswordResetRequest(){
     return;
   }
   if(errorEl) errorEl.textContent='';
-  if(isFirebaseConfigured()){
+  if(isFirebaseConfigured() && firebaseAuth){
     try{
-      const actionCodeSettings = {
-        url: FIREBASE_RESET_URL,
-        handleCodeInApp: false,
-      };
-      await firebaseAuth.sendPasswordResetEmail(email, actionCodeSettings);
-      showForgotPasswordSentState('Password reset instructions have been sent to your registered email.', false);
+      await sendPasswordResetEmailViaFirebase(email);
+      showForgotPasswordSentState('A password reset email has been sent. Follow the instructions in your inbox.', false);
       return;
     }catch(err){
-      const code = err?.code || '';
-      if(code === 'auth/user-not-found' && email.toLowerCase() === getRegisteredEmail()){
-        const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-        DB.set('glr_password_reset_code', resetCode);
-        DB.set('glr_password_reset_email', email.toLowerCase());
-        showForgotPasswordSentState('No Firebase account was found for this email. The app is using a local recovery code instead.', true, resetCode);
-        return;
-      }
-      let message = 'Unable to send reset email. Please try again later.';
-      if(code === 'auth/invalid-email'){
-        message = 'Please enter a valid email address.';
-      } else if(code === 'auth/network-request-failed' || /network|offline|timeout/i.test(err?.message||'')){
-        message = 'Unable to connect to the internet. Check your connection and try again.';
-      }
-      if(errorEl){
-        errorEl.textContent = message;
-      }
+      console.error('Firebase password reset failed:', err);
+      if(errorEl) errorEl.textContent='Unable to send Firebase password reset email. Please try again later.';
       return;
     }
   }
   const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
   DB.set('glr_password_reset_code', resetCode);
   DB.set('glr_password_reset_email', email.toLowerCase());
-  showForgotPasswordSentState('A local recovery code has been generated. Click continue to enter it and reset your password.', true, resetCode);
+  try{
+    await sendPasswordResetEmailViaEmailJS(email, resetCode);
+    showForgotPasswordSentState('A password reset code has been sent to your registered email. Continue to reset your password.', true);
+  }catch(err){
+    console.error('Password reset email delivery failed:', err);
+    showForgotPasswordSentState('Password reset code generated. Email delivery failed; use the code below to reset your password.', true, resetCode);
+  }
 }
 async function doCompletePasswordReset(){
   const email=(document.getElementById('forgot-email')||{}).value?.trim();
@@ -1491,7 +1588,7 @@ async function doResetPin(){
   toast('PIN has been reset successfully. Use your new PIN to unlock.', 'success');
   setLoginMode('pin');
 }
-function doUnlock(){
+async function doUnlock(){
   const pin=(document.getElementById('auth-pin')||{}).value?.trim();
   const errorEl=document.getElementById('login-error');
   if(!pin){
@@ -1502,10 +1599,8 @@ function doUnlock(){
     if(errorEl) errorEl.textContent='';
     const primary=getPrimaryAccountEmail();
     if(primary) setCurrentAccount(primary);
-    document.getElementById('login-overlay').style.display='none';
-    document.getElementById('app').style.display='flex';
     setExplicitLogout(false);
-    initApp();
+    await showAppAndInit();
     return;
   }
   if(errorEl) errorEl.textContent='Incorrect PIN. Please try again.';
@@ -1667,6 +1762,10 @@ async function handleUserSignedIn(user){
     }
     setExplicitLogout(false);
     document.getElementById('login-error').textContent='';
+    if(lastLoginOverlayMode === 'adminLogin' && !adminLoginVerified){
+      // Prevent automatic auth state restoration from interrupting an admin login attempt.
+      return;
+    }
     if(!justLoggedIn && shouldUsePinMode()){
       justLoggedIn=false;
       setLoginMode('pin');
@@ -1678,6 +1777,7 @@ async function handleUserSignedIn(user){
     justLoggedIn=false;
     document.getElementById('login-overlay').style.display='none';
     document.getElementById('app').style.display='flex';
+    await new Promise(requestAnimationFrame);
     initApp();
     showPanel('dashboard');
     void runFirestoreRestore();
@@ -1907,6 +2007,13 @@ async function doLogin(){
   const profile=getOwnerProfileData();
   const isRegisteredEmail = profile.email.toLowerCase()===email.toLowerCase();
   const localAuth = localAuthenticate(email,password);
+  if(localAuth){
+    justLoggedIn=true;
+    setCurrentAccount(email);
+    setExplicitLogout(false);
+    await showAppAndInit();
+    return;
+  }
   if(firebaseAuth){
     if(!navigator.onLine){
       el.textContent = 'Internet is required to log in with email and password. Use PIN unlock when offline.';
@@ -1957,9 +2064,7 @@ async function doLogin(){
     justLoggedIn=true;
     setCurrentAccount(email);
     setExplicitLogout(false);
-    document.getElementById('login-overlay').style.display='none';
-    document.getElementById('app').style.display='flex';
-    initApp();
+    await showAppAndInit();
     return;
   }
   el.textContent = isRegisteredEmail ? 'Incorrect password. Please try again.' : 'Incorrect email or password. Please try again.';
@@ -1981,10 +2086,7 @@ async function doAdminLogin(){
   if(email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD){
     adminLoginVerified=true;
     if(errorEl){ errorEl.textContent=''; errorEl.style.display='none'; }
-    document.getElementById('login-overlay').style.display='none';
-    document.getElementById('app').style.display='flex';
-    initApp();
-    showPanel('admin');
+    await showAppAndInit('admin');
     return;
   }
   if(errorEl){ errorEl.textContent='Invalid admin login credentials.'; errorEl.style.display='block'; }
@@ -2006,13 +2108,11 @@ async function saveLocalRegistration(email, ownerName, contact, password, pin, p
   if(pin) setOwnerPin(pin, email);
   DB.setSales([], email);
   DB.setAudit([], email);
-  DB.setInventory([], email);
-  setDefaultInventory();
+  if(!DB.getInventory().length){
+    setDefaultInventory();
+  }
   setExplicitLogout(false);
-  document.getElementById('login-overlay').style.display='none';
-  document.getElementById('app').style.display='flex';
-  initApp();
-  showPanel('dashboard');
+  await showAppAndInit('dashboard');
   toast('Account created locally. It will sync to Firebase when internet returns.','warning');
 }
 
@@ -2173,8 +2273,13 @@ function togglePasswordVisibility(inputId, button){
   }
 }
 
-function toast(msg,type=''){
+function toast(msg,type='',options={}){
+  const scope = options.scope || 'main';
+  if(currentPanelId === 'admin' && scope !== 'admin' && !options.allowInAdmin){
+    return;
+  }
   const el=document.getElementById('toast');
+  if(!el) return;
   el.textContent=msg;
   el.className='show'+(type?' toast-'+type:'');
   if(toastTimer)clearTimeout(toastTimer);
@@ -2182,6 +2287,7 @@ function toast(msg,type=''){
 }
 
 function showPanel(id){
+  currentPanelId = String(id || '').trim() || currentPanelId;
   document.querySelectorAll('.panel').forEach(p=>{
     p.classList.remove('active');
     p.style.display='none';
@@ -2192,16 +2298,18 @@ function showPanel(id){
     panel.style.display='block';
     panel.classList.add('active');
   }
-  // Hide or show nav bars depending on section
+  // Hide or show nav bars and main-app status depending on section
   const mainNav=document.getElementById('main-nav');
   const wholesaleNav=document.getElementById('wholesale-nav');
   const profileAvatar=document.querySelector('.owner-header-avatar');
   const updateButton=document.querySelector('.btn-header');
+  const syncStatus=document.querySelector('.sync-status');
   const hideHeaderExtras = id === 'wholesale' || id === 'admin';
   if(mainNav) mainNav.style.display = hideHeaderExtras ? 'none' : 'flex';
   if(wholesaleNav) wholesaleNav.style.display = id === 'wholesale' ? 'flex' : 'none';
   if(profileAvatar) profileAvatar.style.display = hideHeaderExtras ? 'none' : '';
   if(updateButton) updateButton.style.display = hideHeaderExtras ? 'none' : '';
+  if(syncStatus) syncStatus.style.display = hideHeaderExtras ? 'none' : 'flex';
   if(id==='admin' && !adminLoginVerified){
     setLoginMode('adminLogin');
     return;
@@ -2310,9 +2418,10 @@ function verifyAdminLogin(){
     closeAdminLoginModal();
     document.getElementById('login-overlay').style.display='none';
     document.getElementById('app').style.display='flex';
+    currentPanelId = 'admin';
     initApp();
     showPanel('admin');
-    toast('Admin access granted.','success');
+    toast('Admin access granted.','success',{scope:'admin'});
   } else {
     errorEl.textContent='Invalid admin credentials. Please check your email and password.';
     errorEl.style.display='block';
@@ -2612,6 +2721,7 @@ function checkNet(){
     }
   }
   lastNetworkOnline = online;
+  refreshSyncBadge();
   return online;
 }
 async function ensureCloudAccountForLocalUser(){
@@ -3405,6 +3515,7 @@ async function syncToCloud(silent=false){
   const queue=DB.getSyncQueue();
   const unSyncedSales=DB.getSales().filter(s=>!s.synced).length;
   if(queue.length===0 && unSyncedSales===0){
+    refreshSyncBadge();
     return true;
   }
   const payload={
@@ -3506,13 +3617,15 @@ async function backupToCloud(){
 }
 
 function setUpdatePanelStatus(message,type=''){
-  // Show update status as alert or console log
-  const colors={success:'✅',danger:'❌',warning:'⚠️'};
-  const icon=colors[type]||'ℹ️';
-  if(type==='success'||type==='danger'){
-    alert(`${icon} ${message}`);
+  const statusEl=document.getElementById('update-modal-status');
+  if(statusEl){
+    statusEl.textContent = message;
+  }
+  const prefix = type === 'success' ? '✅' : type === 'danger' ? '❌' : 'ℹ️';
+  if(type === 'danger'){
+    console.error(`${prefix} ${message}`);
   } else {
-    console.log(`[UPDATE] ${message}`);
+    console.log(`${prefix} ${message}`);
   }
 }
 
@@ -3619,6 +3732,7 @@ async function checkForUpdatesOnStartup(){
 function renderUpdatePanel(){
   const versionEl=document.getElementById('current-app-version');
   const downloadBtn=document.getElementById('download-update-btn');
+  const checkBtn=document.getElementById('check-update-btn');
   if(versionEl){
     if(window.electronAPI?.getAppVersion){
       window.electronAPI.getAppVersion().then(v=>{ versionEl.textContent=v||'Unknown'; }).catch(()=>{ versionEl.textContent='Unknown'; });
@@ -3648,13 +3762,33 @@ function renderUpdatePanel(){
       }
     };
   }
+  if(checkBtn){
+    checkBtn.disabled=false;
+    checkBtn.textContent='CHECK FOR UPDATE';
+  }
   showUpdateProgress(false);
   setUpdatePanelStatus('Click CHECK FOR UPDATE to see whether a newer version is available.');
 }
 
-async function checkAppUpdate(){
+async function openUpdateModal(){
+  const overlay=document.getElementById('update-modal-overlay');
+  if(!overlay) return;
+  overlay.classList.add('open');
+  renderUpdatePanel();
+}
+function closeUpdateModal(){
+  const overlay=document.getElementById('update-modal-overlay');
+  if(!overlay) return;
+  overlay.classList.remove('open');
+}
+
+async function performUpdateCheck(){
+  const checkBtn=document.getElementById('check-update-btn');
+  if(checkBtn){ checkBtn.disabled=true; checkBtn.textContent='Checking...'; }
+  setUpdatePanelStatus('Checking for app updates...');
   if(!electronAvailable||!window.electronAPI?.checkForAppUpdates){
-    setUpdatePanelStatus('App updates are available only in desktop app package.','danger');
+    setUpdatePanelStatus('App updates are available only in packaged desktop installs.','danger');
+    if(checkBtn){ checkBtn.disabled=false; checkBtn.textContent='CHECK FOR UPDATE'; }
     return;
   }
   try{
@@ -3662,34 +3796,45 @@ async function checkAppUpdate(){
     let feedUrl=(cfg?.feedUrl||'').trim();
     if(!feedUrl){
       const entered=(window.prompt(`Paste your app update feed URL.\n${UPDATE_URL_HELP}`)||'').trim();
-      if(!entered){setUpdatePanelStatus('Update URL not provided.','warning');return;}
+      if(!entered){
+        setUpdatePanelStatus('Update URL not provided.','warning');
+        if(checkBtn){ checkBtn.disabled=false; checkBtn.textContent='CHECK FOR UPDATE'; }
+        return;
+      }
       const setRes=await window.electronAPI.setUpdateFeedUrl(entered);
-      if(!setRes?.ok){setUpdatePanelStatus(setRes?.message||'Failed to save update URL.','danger');return;}
+      if(!setRes?.ok){
+        setUpdatePanelStatus(setRes?.message||'Failed to save update URL.','danger');
+        if(checkBtn){ checkBtn.disabled=false; checkBtn.textContent='CHECK FOR UPDATE'; }
+        return;
+      }
       feedUrl=entered;
-      setUpdatePanelStatus('Update URL saved. You can now check updates anytime.','success');
+      setUpdatePanelStatus('Update feed URL saved. Checking now...','success');
     }
-    setUpdatePanelStatus('Checking for app updates...');
     const res=await window.electronAPI.checkForAppUpdates();
     if(!res){
       setUpdatePanelStatus('No response from update service.','danger');
-      return;
-    }
-    if(!res.ok){
+    } else if(!res.ok){
       setUpdatePanelStatus(res.message||'Unable to check for updates.','danger');
-      return;
-    }
-    if(res.updateAvailable){
-      setUpdatePanelStatus(`Update available: version ${res.version}. Click download to install.`,`success`);
+    } else if(res.updateAvailable){
+      setUpdatePanelStatus(`Update available: version ${res.version}. Click DOWNLOAD UPDATE.`,`success`);
       const downloadBtn=document.getElementById('download-update-btn');
       if(downloadBtn) downloadBtn.style.display='inline-flex';
     } else {
       setUpdatePanelStatus(res.message||'Your app is up to date.','success');
       const downloadBtn=document.getElementById('download-update-btn');
       if(downloadBtn) downloadBtn.style.display='none';
+      showUpdateProgress(false);
     }
   }catch(e){
     setUpdatePanelStatus('Update check failed. Try again later.','danger');
+    console.error(e);
+  } finally {
+    if(checkBtn){ checkBtn.disabled=false; checkBtn.textContent='CHECK FOR UPDATE'; }
   }
+}
+
+async function checkAppUpdate(){
+  openUpdateModal();
 }
 
 function hideAppLoader(){
@@ -3725,7 +3870,9 @@ function initApp(){
   if(navigator.onLine){
     const hasPending=DB.getSyncQueue().length>0 || sales.some(s=>!s.synced);
     if(hasPending){
-      toast('Resuming backup of offline data...','info');
+      if(currentPanelId !== 'admin'){
+        toast('Resuming backup of offline data...','info');
+      }
       syncToCloud(true);
     }
   }
