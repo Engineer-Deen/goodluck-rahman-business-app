@@ -8,3 +8,19 @@ temp_build/
 *.log
 *.zip
 *.exe
+
+# Local config and secrets
+.firebase/
+.firebaserc
+.env
+*.env
+*.local
+*.secret
+*.key
+*.pem
+*.p12
+*.jks
+
+# IDE / editor settings
+.idea/
+.vscode/
