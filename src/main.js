@@ -211,6 +211,7 @@ function setupAutoUpdater() {
   try {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.autoRunAppAfterInstall = true;
     applyUpdateFeedUrl(feedUrl);
   } catch (_err) {
     // Skip updater setup if config is invalid.
@@ -234,8 +235,8 @@ function setupAutoUpdater() {
     }
     try {
       autoUpdater.quitAndInstall();
-    } catch (_err) {
-      // Ignore install error in case the app cannot restart immediately.
+    } catch (err) {
+      console.error('Failed to restart and install update:', err);
     }
   });
 }
@@ -271,6 +272,7 @@ ipcMain.handle('updater:set-config', async (_event, url) => {
     try {
       autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;
+      autoUpdater.autoRunAppAfterInstall = true;
       applyUpdateFeedUrl(value);
     } catch (err) {
       return { ok: false, message: String(err && err.message ? err.message : err) };

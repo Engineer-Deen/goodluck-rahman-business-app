@@ -56,13 +56,24 @@ const DB={
     return this.getScoped('glr_inventory', accountEmail)||[];
   },
   setInventory(v, accountEmail){
-    this.set('glr_inventory', v);
+    this.set('glr_inventory', sortInventoryByName(v));
   },
   getSyncQueue(accountEmail){return this.getScoped('glr_sync_queue', accountEmail)||[];},
   setSyncQueue(v, accountEmail){this.setScoped('glr_sync_queue',v, accountEmail);},
   getSyncState(accountEmail){return this.getScoped('glr_sync_state', accountEmail)||{};},
   setSyncState(v, accountEmail){this.setScoped('glr_sync_state',v, accountEmail);},
 };
+
+function sortInventoryByName(items){
+  if(!Array.isArray(items)) return items;
+  return [...items].sort((a,b)=>{
+    const na=String(a?.name||'').trim().toLowerCase();
+    const nb=String(b?.name||'').trim().toLowerCase();
+    if(na<nb) return -1;
+    if(na>nb) return 1;
+    return 0;
+  });
+}
 
 const GOOGLE_SCRIPT_WEB_APP_URL=''; // Optional fallback. Preferred: set inside app when prompted.
 const FIREBASE_CONFIG={
@@ -335,12 +346,18 @@ async function deleteMainAppUser(){
     if(statusEl){ statusEl.textContent='This user does not exist.'; statusEl.style.color='var(--danger)'; }
     return;
   }
+  const confirmed = window.confirm(`Delete user ${email}? This will remove their account and all attached records.`);
+  if(!confirmed){
+    if(statusEl){ statusEl.textContent='User deletion cancelled.'; statusEl.style.color='var(--text-secondary)'; }
+    return;
+  }
   const deleted = removeMainAppUser(email);
   if(deleted){
     if(statusEl){ statusEl.textContent='User deleted successfully.'; statusEl.style.color='var(--success)'; }
     if(emailEl) emailEl.value='';
+    renderRegisteredUsersList();
     const normalizedCurrent = normalizeAccountId(getCurrentAccount() || getCurrentUser()?.email);
-    if(normalizedCurrent && normalizedCurrent === normalized){
+    if(normalizedCurrent && normalizedCurrent === email){
       toast('Deleted user has been signed out.', 'info');
       await doLogout(true);
     }
@@ -1026,22 +1043,34 @@ function getWholesaleOtpEmailContent(code){
     expiryLabel,
   };
 }
+function buildEmailJsTemplateParams(toEmail,values){
+  return {
+    email: toEmail,
+    to_email: toEmail,
+    user_email: toEmail,
+    subject: values.subject,
+    passcode: values.code,
+    time: values.expiryLabel,
+    company_name: values.brand,
+    website_link: values.websiteLink || '#',
+    link: typeof values.link !== 'undefined' ? values.link : values.websiteLink || '#',
+    logo_url: values.logoUrl || values.websiteLink || '',
+    message: values.text || '',
+    html_message: values.html || ''
+  };
+}
+function requireWholesaleRegisteredUser(phone,email,errEl){
+  if(!findWholesaleRegisteredUser(phone,email)){
+    if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_REGISTERED;
+    return false;
+  }
+  return true;
+}
 function getWholesaleEmailJsTemplateParams(toEmail,code){
   const brand=WHOLESALE_EMAIL_DELIVERY.brandName||'Good Luck Rahman Enterprise';
-  const { subject, text, html, expiresAt, expiryLabel }=getWholesaleOtpEmailContent(code);
+  const { subject, text, html, expiryLabel }=getWholesaleOtpEmailContent(code);
   const websiteLink=String(WHOLESALE_EMAIL_DELIVERY.websiteLink||'').trim();
-  return {
-    email:toEmail,
-    to_email:toEmail,
-    user_email:toEmail,
-    subject,
-    passcode:code,
-    time:expiryLabel,
-    company_name:brand,
-    website_link:websiteLink||'#',
-    message:text,
-    html_message:html,
-  };
+  return buildEmailJsTemplateParams(toEmail,{subject,code,expiryLabel,brand,websiteLink,text,html});
 }
 async function sendWholesaleOtpViaFirebaseTriggerEmail(toEmail,code){
   if(!firebaseStore) throw new Error('Firebase Firestore is not available.');
@@ -1052,11 +1081,7 @@ async function sendWholesaleOtpViaFirebaseTriggerEmail(toEmail,code){
     message:{ subject, text, html },
   });
 }
-async function sendWholesaleOtpViaEmailJS(toEmail,code){
-  if(!isWholesaleEmailJsReady()){
-    throw new Error('EmailJS is not configured.');
-  }
-  const cfg=WHOLESALE_EMAIL_DELIVERY.emailjs||{};
+async function sendEmailJs(templateParams,cfg){
   const controller=typeof AbortController!=='undefined'?new AbortController():null;
   const timer=controller?setTimeout(()=>controller.abort(),WHOLESALE_EMAIL_FETCH_MS):null;
   let res;
@@ -1069,7 +1094,7 @@ async function sendWholesaleOtpViaEmailJS(toEmail,code){
         service_id:cfg.serviceId,
         template_id:cfg.templateId,
         user_id:cfg.publicKey,
-        template_params:getWholesaleEmailJsTemplateParams(toEmail,code),
+        template_params:templateParams,
       }),
     });
   }finally{
@@ -1079,6 +1104,13 @@ async function sendWholesaleOtpViaEmailJS(toEmail,code){
     const detail=await res.text().catch(()=>'');
     throw new Error(detail||'EmailJS delivery failed');
   }
+}
+async function sendWholesaleOtpViaEmailJS(toEmail,code){
+  if(!isWholesaleEmailJsReady()){
+    throw new Error('EmailJS is not configured.');
+  }
+  const cfg=WHOLESALE_EMAIL_DELIVERY.emailjs||{};
+  await sendEmailJs(getWholesaleEmailJsTemplateParams(toEmail,code),cfg);
 }
 function getPasswordResetEmailContent(code){
   const brand=PASSWORD_RESET_EMAIL_DELIVERY.brandName||'Good Luck Rahman Enterprise';
@@ -1108,20 +1140,7 @@ function getPasswordResetEmailJsTemplateParams(toEmail,code){
   const { subject, text, html, expiryLabel } = getPasswordResetEmailContent(code);
   const websiteLink=String(PASSWORD_RESET_EMAIL_DELIVERY.websiteLink||'').trim();
   const logoUrl=String(PASSWORD_RESET_EMAIL_DELIVERY.logoUrl||'').trim() || websiteLink;
-  return {
-    email:toEmail,
-    to_email:toEmail,
-    user_email:toEmail,
-    subject,
-    passcode:code,
-    time:expiryLabel,
-    company_name:brand,
-    website_link:websiteLink,
-    link:websiteLink,
-    logo_url:logoUrl,
-    message:text,
-    html_message:html,
-  };
+  return buildEmailJsTemplateParams(toEmail,{subject,code,expiryLabel,brand,websiteLink,link:websiteLink,logoUrl,text,html});
 }
 function isPasswordResetEmailJsReady(){
   const root=PASSWORD_RESET_EMAIL_DELIVERY||{};
@@ -1135,18 +1154,7 @@ async function sendPasswordResetEmailViaEmailJS(toEmail,code){
     throw new Error('EmailJS is not configured for password reset.');
   }
   const cfg=(PASSWORD_RESET_EMAIL_DELIVERY.emailjs||{});
-  const controller=typeof AbortController!=='undefined'?new AbortController():null;
-  const timer=controller?setTimeout(()=>controller.abort(),WHOLESALE_EMAIL_FETCH_MS):null;
-  let res;
-  try{
-    res=await fetch('https://api.emailjs.com/api/v1.0/email/send',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller?.signal,body:JSON.stringify({service_id:cfg.serviceId,template_id:cfg.templateId,user_id:cfg.publicKey,template_params:getPasswordResetEmailJsTemplateParams(toEmail,code),}),});
-  }finally{
-    if(timer) clearTimeout(timer);
-  }
-  if(!res.ok){
-    const detail=await res.text().catch(()=>'');
-    throw new Error(detail||'EmailJS delivery failed');
-  }
+  await sendEmailJs(getPasswordResetEmailJsTemplateParams(toEmail,code),cfg);
 }
 async function sendPasswordResetEmailViaFirebase(toEmail){
   if(!firebaseAuth || !isFirebaseConfigured()){
@@ -1213,10 +1221,7 @@ async function beginWholesaleEmailVerification(){
     if(errEl) errEl.textContent='Enter your registered email address.';
     return;
   }
-  if(!findWholesaleRegisteredUser(phone,email)){
-    if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_REGISTERED;
-    return;
-  }
+  if(!requireWholesaleRegisteredUser(phone,email,errEl)) return;
   if(wholesaleEmailSendInFlight) return;
   const now=Date.now();
   if(wholesalePendingOtpSession
@@ -1281,10 +1286,7 @@ async function completeWholesaleEmailVerification(){
     if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_REGISTERED;
     return;
   }
-  if(!findWholesaleRegisteredUser(phone,email)){
-    if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_REGISTERED;
-    return;
-  }
+  if(!requireWholesaleRegisteredUser(phone,email,errEl)) return;
   if(Date.now()>session.expiresAt){
     wholesalePendingOtpSession=null;
     if(errEl) errEl.textContent='Code expired. Request a new verification code.';
@@ -1989,6 +1991,13 @@ if(!DB.getInventory().length){
   setDefaultInventory();
 }
 
+async function completeLocalAuthentication(email){
+  justLoggedIn=true;
+  setCurrentAccount(email);
+  setExplicitLogout(false);
+  await showAppAndInit();
+}
+
 async function doLogin(){
   const email=(document.getElementById('auth-email')||{}).value?.trim();
   const password=(document.getElementById('auth-password')||{}).value?.trim();
@@ -2008,10 +2017,7 @@ async function doLogin(){
   const isRegisteredEmail = profile.email.toLowerCase()===email.toLowerCase();
   const localAuth = localAuthenticate(email,password);
   if(localAuth){
-    justLoggedIn=true;
-    setCurrentAccount(email);
-    setExplicitLogout(false);
-    await showAppAndInit();
+    await completeLocalAuthentication(email);
     return;
   }
   if(firebaseAuth){
@@ -2061,10 +2067,7 @@ async function doLogin(){
     }
   }
   if(localAuth){
-    justLoggedIn=true;
-    setCurrentAccount(email);
-    setExplicitLogout(false);
-    await showAppAndInit();
+    await completeLocalAuthentication(email);
     return;
   }
   el.textContent = isRegisteredEmail ? 'Incorrect password. Please try again.' : 'Incorrect email or password. Please try again.';
@@ -2944,23 +2947,85 @@ function clearSaleForm(){
   document.getElementById('s-balance-disp').textContent='NLe 0.00';
   setPayType('full');calcSale();
 }
+function renderTableNoData(tb,colspan,message){
+  if(!tb) return;
+  tb.innerHTML=`<tr><td colspan="${colspan}" style="color:var(--text-dim);text-align:center;padding:1.5rem;">${message}</td></tr>`;
+}
+function getSaleStatusBadge(s){
+  return s.paymentType==='part'
+    ? `<span class="badge ${s.status==='COMPLETED'?'badge-success':'badge-warning'}">${s.status}</span>`
+    : '<span class="badge badge-info">FULL</span>';
+}
+function getSalePaymentTypeBadge(s){
+  return `<td><span class="badge ${s.paymentType==='part'?'badge-warning':'badge-info'}">${s.paymentType==='part'?'PART':'FULL'}</span></td>`;
+}
+function buildSaleIdCell(s){
+  return `<td><span class="sale-id-badge">${s.id}</span></td>`;
+}
+function buildSaleDateTimeCell(s){
+  return `<td>${fmtDateTime(s.date,s.time)}</td>`;
+}
+function buildSaleLookupCard(s){
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem;">
+      <div>
+        <div style="font-size:.95rem;margin-bottom:.3rem;"><strong>${s.customer}</strong> - ${s.productName}</div>
+        <div style="font-size:.8rem;color:var(--text-secondary);">${fmtDateTime(s.date,s.time)} - ${s.paymentType==='part'?'Part Payment':'Full Payment'}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="color:var(--warning);font-family:'DM Mono',monospace;">${fmt(s.balance)} balance</div>
+        ${s.balance>0?`<button class="btn btn-primary btn-sm" style="margin-top:.4rem;" onclick="selectPaySale('${s.id}')">PAY NOW</button>`:`<span class="badge badge-success">COMPLETED</span>`}
+      </div>
+    </div>`;
+}
+function buildPaymentSearchItem(s){
+  return `
+    <div class="payment-found" style="margin-bottom:.5rem;cursor:pointer;" onclick="selectPaySale('${s.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;">
+        <div>
+          <div><strong>${s.customer}</strong> - ${s.productName}</div>
+          <div style="margin-top:.3rem;">${fmtDateTime(s.date,s.time)}</div>
+          <div style="margin-top:.25rem;"><span class="sale-id-badge">${s.id}</span></div>
+        </div>
+        <div style="text-align:right;">
+          <div style="color:var(--warning);font-family:'DM Mono',monospace;">${fmt(s.balance)} remaining</div>
+        </div>
+      </div>
+    </div>`;
+}
+function buildSaleInfoGrid(s){
+  const realizedProfit = round2(s.realizedProfit || 0);
+  const remainingProfit = round2((s.profit || 0) - realizedProfit);
+  return `
+    <div style="display:flex;flex-wrap:wrap;gap:1.5rem;">
+      <div><div class="stat-label">Sale ID</div><span class="sale-id-badge">${s.id}</span></div>
+      <div><div class="stat-label">Date & Time</div>${fmtDateTime(s.date,s.time)}</div>
+      <div><div class="stat-label">Customer</div><strong>${s.customer}</strong></div>
+      <div><div class="stat-label">Product</div>${s.productName}</div>
+      <div><div class="stat-label">Total Price</div>${fmt(s.totalPrice)}</div>
+      <div><div class="stat-label">Total Paid So Far</div>${fmt(s.paid)}</div>
+      <div><div class="stat-label">Balance Owed</div><span style="color:var(--warning);font-weight:600;">${fmt(s.balance)}</span></div>
+      <div><div class="stat-label">Profit Recognized</div>${fmt(realizedProfit)}</div>
+      <div><div class="stat-label">Remaining Profit</div>${fmt(remainingProfit)}</div>
+    </div>`;
+}
 function renderSessionTable(){
   const sales=DB.getSales().filter(s=>s.date===today());
   const tb=document.getElementById('session-table');
-  if(!sales.length){tb.innerHTML='<tr><td colspan="10" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No sales recorded today.</td></tr>';return;}
+  if(!sales.length){renderTableNoData(tb,10,'No sales recorded today.');return;}
   tb.innerHTML=sortSalesByIdAscending(sales).map(s=>{
     const profitValue=getRecordedProfit(s);
     return `
     <tr>
-      <td><span class="sale-id-badge">${s.id}</span></td>
+      ${buildSaleIdCell(s)}
       <td><span class="datetime-badge">${dateStr(s.date)}</span></td>
       <td><span class="datetime-badge">${s.time||'-'}</span></td>
       <td>${s.customer}</td>
       <td>${s.productName}</td>
       <td>${fmt(s.totalPrice)}</td>
       <td style="color:${profitValue>=0?'var(--success)':'var(--danger)'};">${fmt(profitValue)}</td>
-      <td><span class="badge ${s.paymentType==='part'?'badge-warning':'badge-info'}">${s.paymentType==='part'?'PART':'FULL'}</span></td>
-      <td>${s.paymentType === 'part' ? `<span class="badge ${s.status==='COMPLETED'?'badge-success':'badge-warning'}">${s.status}</span>` : '<span class="badge badge-info">FULL</span>'}</td>
+      ${getSalePaymentTypeBadge(s)}
+      <td>${getSaleStatusBadge(s)}</td>
       <td><button class="btn btn-secondary btn-sm" onclick="openEditSale('${s.id}')">EDIT</button></td>
     </tr>`;
   }).join('');
@@ -3046,17 +3111,7 @@ function lookupById(){
   const s=DB.getSales().find(x=>x.id.toUpperCase()===q||x.id.toUpperCase().includes(q));
   if(!s){resultEl.className='found-record-preview visible';resultEl.innerHTML=`<span style="color:var(--danger);font-size:.85rem;">No record found for that ID.</span>`;return;}
   resultEl.className='found-record-preview visible';
-  resultEl.innerHTML=`
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem;">
-      <div>
-        <div style="font-size:.95rem;margin-bottom:.3rem;"><strong>${s.customer}</strong> - ${s.productName}</div>
-        <div style="font-size:.8rem;color:var(--text-secondary);">${fmtDateTime(s.date,s.time)} - ${s.paymentType==='part'?'Part Payment':'Full Payment'}</div>
-      </div>
-      <div style="text-align:right;">
-        <div style="color:var(--warning);font-family:'DM Mono',monospace;">${fmt(s.balance)} balance</div>
-        ${s.balance>0?`<button class="btn btn-primary btn-sm" style="margin-top:.4rem;" onclick="selectPaySale('${s.id}')">PAY NOW</button>`:`<span class="badge badge-success">COMPLETED</span>`}
-      </div>
-    </div>`;
+  resultEl.innerHTML=buildSaleLookupCard(s);
 }
 function searchPayment(){
   const q=document.getElementById('pay-search').value.trim().toLowerCase();
@@ -3064,37 +3119,12 @@ function searchPayment(){
   if(!q){el.innerHTML='';document.getElementById('pay-detail-card').style.display='none';return;}
   const sales=DB.getSales().filter(s=>s.balance>0&&s.customer.toLowerCase().includes(q));
   if(!sales.length){el.innerHTML='<div style="color:var(--text-dim);font-size:.88rem;padding:.5rem 0;">No outstanding records found.</div>';return;}
-  el.innerHTML=sales.map(s=>`
-    <div class="payment-found" style="margin-bottom:.5rem;cursor:pointer;" onclick="selectPaySale('${s.id}')">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;">
-        <div>
-          <div><strong>${s.customer}</strong> - ${s.productName}</div>
-          <div style="margin-top:.3rem;">${fmtDateTime(s.date,s.time)}</div>
-          <div style="margin-top:.25rem;"><span class="sale-id-badge">${s.id}</span></div>
-        </div>
-        <div style="text-align:right;">
-          <div style="color:var(--warning);font-family:'DM Mono',monospace;">${fmt(s.balance)} remaining</div>
-        </div>
-      </div>
-    </div>`).join('');
+  el.innerHTML=sales.map(buildPaymentSearchItem).join('');
 }
 function selectPaySale(id){
   selectedPaySaleId=id;
   const s=DB.getSales().find(x=>x.id===id);if(!s)return;
-  const realizedProfit = round2(s.realizedProfit || 0);
-  const remainingProfit = round2((s.profit || 0) - realizedProfit);
-  document.getElementById('pay-info').innerHTML=`
-    <div style="display:flex;flex-wrap:wrap;gap:1.5rem;">
-      <div><div class="stat-label">Sale ID</div><span class="sale-id-badge">${s.id}</span></div>
-      <div><div class="stat-label">Date & Time</div>${fmtDateTime(s.date,s.time)}</div>
-      <div><div class="stat-label">Customer</div><strong>${s.customer}</strong></div>
-      <div><div class="stat-label">Product</div>${s.productName}</div>
-      <div><div class="stat-label">Total Price</div>${fmt(s.totalPrice)}</div>
-      <div><div class="stat-label">Total Paid So Far</div>${fmt(s.paid)}</div>
-      <div><div class="stat-label">Balance Owed</div><span style="color:var(--warning);font-weight:600;">${fmt(s.balance)}</span></div>
-      <div><div class="stat-label">Profit Recognized</div>${fmt(realizedProfit)}</div>
-      <div><div class="stat-label">Remaining Profit</div>${fmt(remainingProfit)}</div>
-    </div>`;
+  document.getElementById('pay-info').innerHTML=buildSaleInfoGrid(s);
   document.getElementById('pay-amount').value='';
   document.getElementById('pay-preview-balance').textContent='-';
   document.getElementById('pay-detail-card').style.display='block';
@@ -3136,11 +3166,11 @@ function recordPayment(){
 function renderOutstanding(){
   const sales=DB.getSales().filter(s=>s.balance>0);
   const tb=document.getElementById('outstanding-table');
-  if(!sales.length){tb.innerHTML='<tr><td colspan="8" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No outstanding balances.</td></tr>';return;}
+  if(!sales.length){renderTableNoData(tb,8,'No outstanding balances.');return;}
   tb.innerHTML=sales.map(s=>`
     <tr>
-      <td><span class="sale-id-badge">${s.id}</span></td>
-      <td>${fmtDateTime(s.date,s.time)}</td>
+      ${buildSaleIdCell(s)}
+      ${buildSaleDateTimeCell(s)}
       <td>${s.customer}</td>
       <td>${s.productName}</td>
       <td>${fmt(s.totalPrice)}</td>
@@ -3191,10 +3221,10 @@ function renderRecords(){
     <div class="stat-card"><div class="stat-label">Qty This View</div><div class="stat-value">${qty}</div></div>
     <div class="stat-card"><div class="stat-label">All-Time Qty</div><div class="stat-value">${totalAllQty}</div><div class="stat-sub">Includes all periods</div></div>`;
   const tb=document.getElementById('records-table');
-  if(!shown.length){tb.innerHTML='<tr><td colspan="10" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No records for this period.</td></tr>';return;}
+  if(!shown.length){renderTableNoData(tb,10,'No records for this period.');return;}
   tb.innerHTML=sortSalesByIdAscending(shown).map(s=>`
     <tr>
-      <td><span class="sale-id-badge">${s.id}</span></td>
+      ${buildSaleIdCell(s)}
       <td><span class="datetime-badge">${dateStr(s.date)}</span></td>
       <td>${s.customer}</td>
       <td>${s.productName}</td>
@@ -3202,7 +3232,7 @@ function renderRecords(){
       <td>${fmt(s.paid)}</td>
       <td style="color:${s.balance>0?'var(--warning)':'var(--success)'};">${fmt(s.balance)}</td>
       <td style="color:${(s.realizedProfit||0)>=0?'var(--success)':'var(--danger)'};">${fmt(s.realizedProfit||0)}</td>
-      <td>${s.paymentType === 'part' ? `<span class="badge ${s.status==='COMPLETED'?'badge-success':'badge-warning'}">${s.status}</span>` : '<span class="badge badge-info">FULL</span>'}</td>
+      <td>${getSaleStatusBadge(s)}</td>
       <td style="display:flex;gap:.5rem;flex-wrap:wrap;">
         <button class="btn btn-danger btn-sm" onclick="promptDelete('${s.id}')">REMOVE</button>
       </td>
@@ -3279,18 +3309,18 @@ function renderDeleteDesk(){
     return matchQ&&(!st||s.status===st);
   });
   if(!sales.length){
-    tb.innerHTML='<tr><td colspan="8" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No records found for deletion.</td></tr>';
+    renderTableNoData(tb,8,'No records found for deletion.');
     return;
   }
   tb.innerHTML=sortSalesByIdAscending(sales).map(s=>`
     <tr>
-      <td><span class="sale-id-badge">${s.id}</span></td>
-      <td>${fmtDateTime(s.date,s.time)}</td>
+      ${buildSaleIdCell(s)}
+      ${buildSaleDateTimeCell(s)}
       <td>${s.customer}</td>
       <td>${s.productName}</td>
       <td>${s.qty}</td>
       <td>${fmt(s.totalPrice)}</td>
-      <td><span class="badge ${s.status==='COMPLETED'?'badge-success':'badge-warning'}">${s.status}</span></td>
+      <td>${getSaleStatusBadge(s)}</td>
       <td><button class="btn btn-danger btn-sm" onclick="promptDelete('${s.id}')">REMOVE</button></td>
     </tr>`).join('');
 }
@@ -3324,18 +3354,18 @@ function renderDashboard(){
   document.getElementById('stat-total-qty').textContent=totalQty;
   const recent=allSales.slice().reverse().slice(0,8);
   const tb=document.getElementById('dash-recent');
-  if(!recent.length){tb.innerHTML='<tr><td colspan="7" style="color:var(--text-dim);text-align:center;padding:1.5rem;">No transactions yet.</td></tr>';return;}
+  if(!recent.length){renderTableNoData(tb,7,'No transactions yet.');return;}
   tb.innerHTML=recent.map(s=>{
     const profitValue=getRecordedProfit(s);
     return `
     <tr>
-      <td><span class="sale-id-badge">${s.id}</span></td>
-      <td>${fmtDateTime(s.date,s.time)}</td>
+      ${buildSaleIdCell(s)}
+      ${buildSaleDateTimeCell(s)}
       <td>${s.customer}</td>
       <td>${s.productName}</td>
       <td>${fmt(s.totalPrice)}</td>
       <td style="color:${profitValue>=0?'var(--success)':'var(--danger)'};">${fmt(profitValue)}</td>
-      <td>${s.paymentType === 'part' ? `<span class="badge ${s.status==='COMPLETED'?'badge-success':'badge-warning'}">${s.status}</span>` : '<span class="badge badge-info">FULL</span>'}</td>
+      <td>${getSaleStatusBadge(s)}</td>
     </tr>`;
   }).join('');
 }
@@ -3424,6 +3454,56 @@ function confirmDelete(){
 }
 
 // AUDIT LOG
+function getAuditEntryDate(entry){
+  return entry.auditDateDisplay||new Date(entry.auditDate).toLocaleString('en-GB');
+}
+function buildAuditReasonText(entry){
+  return `* ${entry.auditReason||'No reason recorded'}${entry.auditNotes ? ' - "' + entry.auditNotes + '"' : ''}`;
+}
+function buildAuditProductDeletedEntry(entry){
+  return `
+    <div class="audit-item" style="border-left:3px solid var(--danger);padding-left:1rem;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem;">
+        <div>
+          <span class="badge badge-danger" style="margin-bottom:.35rem;">PRODUCT REMOVED</span>
+          <div><strong>${entry.productName}</strong> <span class="inv-pid">${entry.productId||'-'}</span></div>
+          <div class="audit-reason">${buildAuditReasonText(entry)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:.78rem;color:var(--text-dim);">Unit Cost was: ${fmt(entry.unitCost)}</div>
+          <div class="audit-meta">ARCHIVED: ${getAuditEntryDate(entry)}</div>
+        </div>
+      </div>
+    </div>`;
+}
+function getAuditReasonCategory(reason){
+  if(reason.includes('Customer Return')) return {badge:'badge-info',label:'CUSTOMER RETURN'};
+  if(reason.includes('Defective')||reason.includes('Quality')||reason.includes('Expired')) return {badge:'badge-danger',label:'PRODUCT ISSUE'};
+  if(reason.includes('Input Error')) return {badge:'badge-warning',label:'INPUT ERROR'};
+  if(reason.includes('Cancelled')) return {badge:'badge-warning',label:'CANCELLED'};
+  if(reason.includes('Product Removed')) return {badge:'badge-danger',label:'PRODUCT REMOVED'};
+  return {badge:'badge-danger',label:'REMOVED'};
+}
+function buildAuditEntryCard(entry){
+  const isProductPull = entry.auditType === 'product-removal';
+  const reasonCategory = getAuditReasonCategory(entry.auditReason||'');
+  return `
+    <div class="audit-item" style="${isProductPull ? 'border-left:3px solid var(--warning);padding-left:1rem;opacity:.85;' : 'border-left:3px solid var(--danger);padding-left:1rem;'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem;">
+        <div>
+          ${isProductPull ? `<span class="badge badge-warning" style="margin-bottom:.35rem;">VOIDED - PRODUCT REMOVED</span><br>` : `<span class="badge ${reasonCategory.badge}" style="margin-bottom:.35rem;">${reasonCategory.label}</span><br>`}
+          <span class="sale-id-badge">${entry.id||'-'}</span>
+          <strong style="margin-left:.5rem;">${entry.customer||'-'}</strong> - ${entry.productName||entry.removedProductName||'-'}
+          <div style="margin-top:.3rem;">${entry.date ? fmtDateTime(entry.date,entry.time) : '-'}</div>
+          <div class="audit-reason">${buildAuditReasonText(entry)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-family:'DM Mono',monospace;font-size:.85rem;">${entry.totalPrice!=null ? fmt(entry.totalPrice) : '-'}</div>
+          <div class="audit-meta">ARCHIVED: ${getAuditEntryDate(entry)}</div>
+        </div>
+      </div>
+    </div>`;
+}
 function renderAudit(){
   const audit=DB.getAudit();
   const q=(document.getElementById('audit-search')?.value||'').toLowerCase();
@@ -3440,9 +3520,7 @@ function renderAudit(){
     return matchQ&&matchR;
   });
 
-  // Update stats
   document.getElementById('audit-count').textContent=audit.length;
-  // Top reason
   const reasons={};
   for(const e of audit){if(e.auditReason)reasons[e.auditReason]=(reasons[e.auditReason]||0)+1;}
   const top=Object.entries(reasons).sort((a,b)=>b[1]-a[1])[0];
@@ -3451,51 +3529,14 @@ function renderAudit(){
   const el=document.getElementById('audit-list');
   if(!shown.length){el.innerHTML='<div style="color:var(--text-dim);font-size:.88rem;padding:1rem 0;">No archived records match the current filter.</div>';return;}
 
-  el.innerHTML=shown.slice().reverse().map(entry=>{
-    if(entry.auditType==='product-deleted'){
-      return `
-        <div class="audit-item" style="border-left:3px solid var(--danger);padding-left:1rem;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem;">
-            <div>
-              <span class="badge badge-danger" style="margin-bottom:.35rem;">PRODUCT REMOVED</span>
-              <div><strong>${entry.productName}</strong> <span class="inv-pid">${entry.productId||'-'}</span></div>
-              <div class="audit-reason">* ${entry.auditReason}${entry.auditNotes?' - "'+entry.auditNotes+'"':''}</div>
-            </div>
-            <div style="text-align:right;">
-              <div style="font-size:.78rem;color:var(--text-dim);">Unit Cost was: ${fmt(entry.unitCost)}</div>
-              <div class="audit-meta">ARCHIVED: ${entry.auditDateDisplay||new Date(entry.auditDate).toLocaleString('en-GB')}</div>
-            </div>
-          </div>
-        </div>`;
-    }
-    const isProductPull=entry.auditType==='product-removal';
-    const reasonCategory=getReasonCategory(entry.auditReason||'');
-    return `
-      <div class="audit-item" style="${isProductPull?'border-left:3px solid var(--warning);padding-left:1rem;opacity:.85;':'border-left:3px solid var(--danger);padding-left:1rem;'}">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem;">
-          <div>
-            ${isProductPull?`<span class="badge badge-warning" style="margin-bottom:.35rem;">VOIDED - PRODUCT REMOVED</span><br>`:
-              `<span class="badge ${reasonCategory.badge}" style="margin-bottom:.35rem;">${reasonCategory.label}</span><br>`}
-            <span class="sale-id-badge">${entry.id||'-'}</span>
-            <strong style="margin-left:.5rem;">${entry.customer||'-'}</strong> - ${entry.productName||entry.removedProductName||'-'}
-            <div style="margin-top:.3rem;">${entry.date?fmtDateTime(entry.date,entry.time):'-'}</div>
-            <div class="audit-reason">* ${entry.auditReason||'No reason recorded'}${entry.auditNotes?' - "'+entry.auditNotes+'"':''}</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="font-family:'DM Mono',monospace;font-size:.85rem;">${entry.totalPrice!=null?fmt(entry.totalPrice):'-'}</div>
-            <div class="audit-meta">ARCHIVED: ${entry.auditDateDisplay||new Date(entry.auditDate).toLocaleString('en-GB')}</div>
-          </div>
-        </div>
-      </div>`;
-  }).join('');
+  el.innerHTML=shown.slice().reverse().map(entry=>
+    entry.auditType==='product-deleted'
+      ? buildAuditProductDeletedEntry(entry)
+      : buildAuditEntryCard(entry)
+  ).join('');
 }
 function getReasonCategory(reason){
-  if(reason.includes('Customer Return'))return{badge:'badge-info',label:'CUSTOMER RETURN'};
-  if(reason.includes('Defective')||reason.includes('Quality')||reason.includes('Expired'))return{badge:'badge-danger',label:'PRODUCT ISSUE'};
-  if(reason.includes('Input Error'))return{badge:'badge-warning',label:'INPUT ERROR'};
-  if(reason.includes('Cancelled'))return{badge:'badge-warning',label:'CANCELLED'};
-  if(reason.includes('Product Removed'))return{badge:'badge-danger',label:'PRODUCT REMOVED'};
-  return{badge:'badge-danger',label:'REMOVED'};
+  return getAuditReasonCategory(reason);
 }
 
 async function syncToCloud(silent=false){
@@ -3722,10 +3763,47 @@ async function checkForUpdatesOnStartup(){
     if(!feedUrl) return;
     const res = await window.electronAPI.checkForAppUpdates();
     if(res?.ok && res.updateAvailable){
-      toast(`New update available: version ${res.version}. Use CHECK FOR UPDATE button in nav bar.`, 'success');
+      toast(`New update available: version ${res.version}. It will download and install automatically when ready.`, 'success');
+      await startUpdateDownload();
     }
   }catch(_){
     // Ignore silent startup update check failures.
+  }
+}
+
+async function startUpdateDownload(){
+  const downloadBtn=document.getElementById('download-update-btn');
+  if(downloadBtn){
+    downloadBtn.style.display='none';
+    downloadBtn.disabled=true;
+    downloadBtn.textContent='Downloading...';
+  }
+  showUpdateProgress(true);
+  const details=document.getElementById('update-progress-details');
+  if(details) details.textContent='Starting download...';
+  setUpdatePanelStatus('Downloading update. Please wait...', 'success');
+  try {
+    const res = await window.electronAPI.downloadAppUpdate();
+    if(!res?.ok){
+      setUpdatePanelStatus(res?.message || 'Download failed. Try again later.', 'danger');
+      showUpdateProgress(false);
+      if(downloadBtn){
+        downloadBtn.style.display='inline-flex';
+        downloadBtn.disabled=false;
+        downloadBtn.textContent='DOWNLOAD UPDATE';
+      }
+    } else {
+      setUpdatePanelStatus('Update download started. Waiting for install...', 'success');
+    }
+  } catch (err) {
+    setUpdatePanelStatus('Download start failed. Try again later.', 'danger');
+    console.error('Error starting update download:', err);
+    showUpdateProgress(false);
+    if(downloadBtn){
+      downloadBtn.style.display='inline-flex';
+      downloadBtn.disabled=false;
+      downloadBtn.textContent='DOWNLOAD UPDATE';
+    }
   }
 }
 
@@ -3784,6 +3862,11 @@ function closeUpdateModal(){
 
 async function performUpdateCheck(){
   const checkBtn=document.getElementById('check-update-btn');
+  const downloadBtn=document.getElementById('download-update-btn');
+  if(downloadBtn){
+    downloadBtn.style.display='none';
+    downloadBtn.disabled=false;
+  }
   if(checkBtn){ checkBtn.disabled=true; checkBtn.textContent='Checking...'; }
   setUpdatePanelStatus('Checking for app updates...');
   if(!electronAvailable||!window.electronAPI?.checkForAppUpdates){
@@ -3810,18 +3893,26 @@ async function performUpdateCheck(){
       feedUrl=entered;
       setUpdatePanelStatus('Update feed URL saved. Checking now...','success');
     }
+
+    const currentVersion = typeof window.electronAPI.getAppVersion === 'function'
+      ? await window.electronAPI.getAppVersion().catch(()=>'')
+      : '';
+
     const res=await window.electronAPI.checkForAppUpdates();
     if(!res){
       setUpdatePanelStatus('No response from update service.','danger');
     } else if(!res.ok){
       setUpdatePanelStatus(res.message||'Unable to check for updates.','danger');
+    } else if(res.updateAvailable && res.version && currentVersion && res.version === currentVersion){
+      setUpdatePanelStatus('You are using the latest update.','success');
+      if(downloadBtn) downloadBtn.style.display='none';
+      showUpdateProgress(false);
     } else if(res.updateAvailable){
-      setUpdatePanelStatus(`Update available: version ${res.version}. Click DOWNLOAD UPDATE.`,`success`);
-      const downloadBtn=document.getElementById('download-update-btn');
-      if(downloadBtn) downloadBtn.style.display='inline-flex';
+      setUpdatePanelStatus(`Update available: version ${res.version}. Downloading now...`,`success`);
+      if(downloadBtn) downloadBtn.style.display='none';
+      await startUpdateDownload();
     } else {
-      setUpdatePanelStatus(res.message||'Your app is up to date.','success');
-      const downloadBtn=document.getElementById('download-update-btn');
+      setUpdatePanelStatus(res.message||'You are using the latest update.','success');
       if(downloadBtn) downloadBtn.style.display='none';
       showUpdateProgress(false);
     }
