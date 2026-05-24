@@ -69,6 +69,17 @@ The project uses `electron-builder` for packaging:
   npm run dist
   ```
 
+## Release updates for Windows
+
+- Build a Windows update release:
+  ```bash
+  npm run release:update:win
+  ```
+
+## Build Output Folders
+
+- Windows packages will be placed in `package-output/win`
+
 ## Usage
 
 - Start the app with `npm run dev`

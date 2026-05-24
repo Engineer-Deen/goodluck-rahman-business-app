@@ -1,17 +1,19 @@
 {
   "name": "goodluck-rahman-enterprise",
-  "version": "4.5.3",
+  "version": "4.5.4",
   "description": "Good Luck Rahman Enterprise desktop app",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
     "build": "electron-builder",
+    "build:web": "react-scripts build",
     "dist": "npm run package",
     "dist:exe": "npm run package",
-    "dist:installer": "electron-builder --win nsis --x64",
-    "dist:portable": "electron-builder --win portable --x64",
+    "dist:installer": "electron-builder --win nsis --x64 --config.directories.output=package-output/win",
+    "dist:portable": "electron-builder --win portable --x64 --config.directories.output=package-output/win",
     "release:update": "node scripts/build-update-release.js",
+    "release:update:win": "node scripts/build-update-release.js --platform=win",
     "package": "node scripts/package.js"
   },
   "author": "Good Luck Rahman",
@@ -35,7 +37,16 @@
     ],
     "directories": {
       "buildResources": "src/assets",
-      "output": "package-output/installer"
+      "output": "package-output"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.business",
+      "icon": "src/assets/icon.icns",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "win": {
       "signAndEditExecutable": false,
@@ -43,7 +54,8 @@
         "nsis",
         "portable",
         "zip"
-      ]
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
