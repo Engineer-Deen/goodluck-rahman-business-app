@@ -1623,6 +1623,7 @@ const AUTO_SYNC_INTERVAL_MS=30000;
 let syncRetryCountOnline=0;  // Track retry attempts
 let remoteDataUnsubscribe=null;
 let lastRemoteSnapshotHash='';
+let lastLocalFirestoreWriteAt=0;
 let remoteListenerInitialSnapshot=true;
 
 function initFirebase(){
@@ -1820,6 +1821,7 @@ async function saveUserDataToFirestore(){
     syncQueue:DB.getSyncQueue(),
     syncState:DB.getSyncState(),
   },{merge:true});
+  lastLocalFirestoreWriteAt = Date.now();
 }
 
 async function loadUserDataFromFirestore(){
@@ -1833,11 +1835,12 @@ async function loadUserDataFromFirestore(){
   const pendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
   const pendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
   const pendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
-  if(data.sales) DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, pendingSaleIds));
+  if(data.sales) DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, pendingSaleIds, true));
   if(data.inventory) DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, pendingInventoryIds));
   if(data.audit) DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, pendingAuditIds));
-  const hasPendingProfileUpdate = queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo');
-  if(data.profile && !hasPendingProfileUpdate) DB.setScoped(OWNER_PROFILE_KEY, data.profile);
+  if(data.profile && !queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo')){
+    DB.setScoped(OWNER_PROFILE_KEY, data.profile, normalized);
+  }
   if(data.profile?.pin){
     setOwnerPin(data.profile.pin, normalized);
   }
@@ -1845,7 +1848,22 @@ async function loadUserDataFromFirestore(){
     setOwnerPin(data.pin, normalized);
   }
   if(data.syncState){
-    DB.setSyncState(data.syncState);
+    DB.setSyncState(data.syncState, normalized);
+  }
+  const prunedQueue = pruneRemoteSyncQueue(data);
+  if(prunedQueue.length !== queue.length){
+    const updatedPendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+    const updatedPendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+    const updatedPendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
+    if(data.sales){
+      DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, updatedPendingSaleIds, true));
+    }
+    if(data.inventory){
+      DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, updatedPendingInventoryIds));
+    }
+    if(data.audit){
+      DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, updatedPendingAuditIds));
+    }
   }
   refreshSyncBadge();
   renderOwnerProfile();
@@ -1899,7 +1917,8 @@ function attachRemoteFirestoreListener(user){
       lastRemoteSnapshotHash = hash;
       const isInitial = remoteListenerInitialSnapshot;
       remoteListenerInitialSnapshot = false;
-      await mergeRemoteFirestoreSnapshotData(data, isInitial);
+      const isRecentLocalWrite = Date.now() - lastLocalFirestoreWriteAt < 4000;
+      await mergeRemoteFirestoreSnapshotData(data, isInitial || isRecentLocalWrite, isRecentLocalWrite);
     }, (err)=>{
       console.warn('Firestore realtime listener error:', err);
     });
@@ -1908,7 +1927,7 @@ function attachRemoteFirestoreListener(user){
   }
 }
 
-async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false){
+async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false, suppressNotification=false){
   const user=getCurrentUser();
   const normalized=normalizeAccountId(user?.email || getCurrentAccount());
   const queue=DB.getSyncQueue();
@@ -1920,7 +1939,7 @@ async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false){
   const currentInventory=DB.getInventory();
   const currentAudit=DB.getAudit();
   if(Array.isArray(data.sales)){
-    const merged=mergeRemoteRecords(currentSales, data.sales, pendingSaleIds);
+    const merged=mergeRemoteRecords(currentSales, data.sales, pendingSaleIds, true);
     if(JSON.stringify(merged) !== JSON.stringify(currentSales)){
       DB.setSales(merged);
       changed=true;
@@ -1958,12 +1977,37 @@ async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false){
     DB.setSyncState(data.syncState, normalized);
     changed=true;
   }
+  const prunedQueue = pruneRemoteSyncQueue(data);
+  if(prunedQueue.length !== queue.length){
+    changed=true;
+    const updatedPendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+    const updatedPendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+    const updatedPendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
+    if(Array.isArray(data.sales)){
+      const merged=mergeRemoteRecords(DB.getSales(), data.sales, updatedPendingSaleIds, true);
+      if(JSON.stringify(merged) !== JSON.stringify(DB.getSales())){
+        DB.setSales(merged);
+      }
+    }
+    if(Array.isArray(data.inventory)){
+      const merged=mergeRemoteRecords(DB.getInventory(), data.inventory, updatedPendingInventoryIds);
+      if(JSON.stringify(merged) !== JSON.stringify(DB.getInventory())){
+        DB.setInventory(merged, normalized);
+      }
+    }
+    if(Array.isArray(data.audit)){
+      const merged=mergeRemoteRecords(DB.getAudit(), data.audit, updatedPendingAuditIds);
+      if(JSON.stringify(merged) !== JSON.stringify(DB.getAudit())){
+        DB.setAudit(merged);
+      }
+    }
+  }
   if(changed){
     refreshSyncBadge();
     renderDashboard();
     renderSessionTable();
     renderRecords();
-    if(!isInitialSnapshot){
+    if(!isInitialSnapshot && !suppressNotification){
       toast('Cloud updates received from another device.','success');
     }
   }
@@ -2014,7 +2058,75 @@ function getPendingIdsForOpTypes(types){
   return ids;
 }
 
-function mergeRemoteRecords(localRecords, remoteRecords, pendingIds){
+function pruneRemoteSyncQueue(remoteData){
+  const queue=DB.getSyncQueue();
+  if(!queue.length) return queue;
+  const salesMap=new Map((remoteData.sales||[]).map(item=>[item?.id, item]));
+  const inventoryMap=new Map((remoteData.inventory||[]).map(item=>[item?.id, item]));
+  const auditMap=new Map((remoteData.audit||[]).map(item=>[item?.id, item]));
+  const profileData = remoteData.profile || {};
+  const normalized = normalizeAccountId(getCurrentUser()?.email || getCurrentAccount());
+
+  const cleaned = queue.filter(item=>{
+    if(!item || !item.op || !item.payload) return true;
+    const payload=item.payload;
+    switch(item.op){
+      case 'upsert_sale':{
+        const remoteSale = salesMap.get(payload.id);
+        if(!remoteSale) return true;
+        return !areRecordsEqual(payload, remoteSale, ['synced']);
+      }
+      case 'delete_sale':{
+        const remoteSale = salesMap.get(payload.id);
+        return !!remoteSale;
+      }
+      case 'upsert_inventory':{
+        const remoteItem = inventoryMap.get(payload.id);
+        if(!remoteItem) return true;
+        return !areRecordsEqual(payload, remoteItem);
+      }
+      case 'delete_inventory':{
+        const remoteItem = inventoryMap.get(payload.id);
+        return !!remoteItem;
+      }
+      case 'append_audit':{
+        const remoteAudit = auditMap.get(payload.auditId || payload.id);
+        return !remoteAudit;
+      }
+      case 'update_profile':{
+        return !areRecordsEqual(payload, profileData);
+      }
+      case 'update_owner_photo':{
+        return profileData.photo !== payload.photo;
+      }
+      default:
+        return true;
+    }
+  });
+  if(cleaned.length !== queue.length){
+    DB.setSyncQueue(cleaned);
+  }
+  return cleaned;
+}
+
+function areRecordsEqual(a,b,ignoreKeys=[]){
+  if(a===b) return true;
+  if(typeof a !== 'object' || typeof b !== 'object' || a===null || b===null) return a===b;
+  const keys=new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
+  for(const key of keys){
+    if(ignoreKeys.includes(key)) continue;
+    const va=a[key];
+    const vb=b[key];
+    if(typeof va === 'object' && typeof vb === 'object'){
+      if(!areRecordsEqual(va,vb,ignoreKeys)) return false;
+    } else if(va !== vb) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function mergeRemoteRecords(localRecords, remoteRecords, pendingIds, markRemoteSynced=false){
   const merged=[];
   const remoteMap=new Map((remoteRecords||[]).map(item=>[item?.id, item]));
   for(const record of localRecords||[]){
@@ -2026,7 +2138,11 @@ function mergeRemoteRecords(localRecords, remoteRecords, pendingIds){
   for(const record of remoteRecords||[]){
     if(!record || !record.id) continue;
     if(pendingIds.has(record.id)) continue;
-    merged.push(record);
+    if(markRemoteSynced && typeof record === 'object'){
+      merged.push({ ...record, synced: true });
+    } else {
+      merged.push(record);
+    }
   }
   return merged;
 }
@@ -3784,6 +3900,7 @@ async function syncToCloud(silent=false){
       DB.setSyncQueue([]);
       syncRetryCountOnline=0;
       DB.setSyncState({lastSyncedAt:new Date().toISOString(),lastStatus:'success',synced:true});
+      lastLocalFirestoreWriteAt = Date.now();
       if(!silent)toast('✓ All offline data backed up to cloud successfully!','success');
       refreshSyncBadge();
       renderDashboard();renderSessionTable();renderRecords();
