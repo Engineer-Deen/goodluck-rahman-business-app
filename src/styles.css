@@ -1003,7 +1003,7 @@ header {
 .brand-tagline { font-size: 0.75rem; color: var(--text-secondary); letter-spacing: 0.05em; }
 .header-right { display: flex; align-items: center; gap: 1rem; }
 
-..owner-photo-section { flex: 1; display: flex; justify-content: center; flex-direction: column; align-items: center; gap: 0.9rem; }
+.owner-photo-section { flex: 1; display: flex; justify-content: center; flex-direction: column; align-items: center; gap: 0.9rem; }
 .owner-photo {
   width: 120px; height: 120px; border-radius: 50%;
   border: 2px solid var(--gold-dim);
@@ -1206,10 +1206,236 @@ tr:hover td { background: rgba(245,200,66,0.04); }
 ::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 3px; }
 
 /* ── RESPONSIVE ── */
-@media (max-width: 600px) {
+
+/* Mobile devices (up to 480px) */
+@media (max-width: 480px) {
+  /* Global adjustments */
+  body { font-size: 14px; }
+  
+  /* Login overlay and box */
+  #login-overlay { padding: 1rem; }
+  .login-box {
+    width: 100%;
+    max-width: 100%;
+    padding: 0 0 2rem 0;
+    margin: auto;
+  }
+  
+  .login-body { padding: 0 1rem; }
+  .login-back { top: 0.75rem; left: 0.75rem; font-size: 0.85rem; }
+  
+  /* SVG logo sizing */
+  .login-svg-logo { max-height: 100px; }
+  .login-banner { margin-bottom: 0.5rem; }
+  
+  /* Welcome art image */
+  .welcome-art { margin-bottom: 1rem; }
+  .welcome-art-frame {
+    width: clamp(100px, 35vw, 140px);
+    height: clamp(100px, 35vw, 140px);
+  }
+  
+  /* Text sizes */
+  .login-sub {
+    font-size: 1.25rem;
+    margin-bottom: 0.5rem;
+  }
+  
+  .login-note {
+    font-size: 0.9rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+  }
+  
+  /* Buttons - touch-friendly sizes */
+  .btn-login,
+  .btn-secondary,
+  .btn-wholesale-entry {
+    min-height: 44px;
+    padding: 0.75rem 1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    border-radius: 8px;
+    width: 100%;
+  }
+  
+  .login-actions {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  
+  .login-actions .btn-login,
+  .login-actions .btn-secondary {
+    min-width: unset;
+    width: 100%;
+  }
+  
+  /* Form fields */
+  .wholesale-field-label {
+    margin: 0.75rem 0 0.35rem;
+    font-size: 0.75rem;
+  }
+  
+  .wholesale-field-input {
+    padding: 0.85rem 1rem;
+    font-size: 16px; /* Prevents zoom on iOS */
+    border-radius: 8px;
+  }
+  
+  .wholesale-phone-row {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  
+  .wholesale-country-chip {
+    width: 100%;
+  }
+  
+  /* Button styles */
+  .btn-wholesale-send-code {
+    min-height: 44px;
+    font-size: 0.9rem;
+    padding: 0.75rem 1rem;
+  }
+  
+  /* Form grid */
   .form-grid { grid-template-columns: 1fr; }
-  .stats-grid { grid-template-columns: 1fr 1fr; }
-  .stat-value { font-size: 1.2rem; }
-  .login-box { width: 95vw; }
-  .login-logo { font-size: 1rem; }
+  .stats-grid { grid-template-columns: 1fr; }
+  
+  .stat-value { font-size: 1.5rem; }
+  .stat-label { font-size: 0.85rem; }
+  
+  /* Typography */
+  h1 { font-size: 1.75rem; }
+  h2 { font-size: 1.5rem; }
+  h3 { font-size: 1.25rem; }
+  
+  /* Table responsiveness */
+  table { font-size: 0.85rem; }
+  
+  /* Input fields - touch-friendly */
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  input[type="time"],
+  select,
+  textarea {
+    min-height: 44px;
+    padding: 0.75rem 1rem;
+    font-size: 16px;
+    border-radius: 8px;
+  }
+  
+  /* Remove double tap zoom delay */
+  input, button, select { touch-action: manipulation; }
+  
+  /* Modals and overlays */
+  .modal-content,
+  .dialog-box {
+    max-width: 95vw;
+    margin: auto 1rem;
+  }
+  
+  /* Padding adjustments */
+  .container { padding: 1.5rem; }
+  
+  /* Margins */
+  p { margin: 0.75rem 0; }
+}
+
+/* Tablets (481px to 768px) */
+@media (max-width: 768px) {
+  #login-overlay { padding: 1rem; }
+  
+  .login-box {
+    width: 90vw;
+    max-width: 450px;
+  }
+  
+  .login-body { padding: 0 1.2rem; }
+  
+  .login-svg-logo { max-height: 110px; }
+  
+  .welcome-art-frame {
+    width: clamp(120px, 40vw, 160px);
+    height: clamp(120px, 40vw, 160px);
+  }
+  
+  .login-sub { font-size: 1.4rem; }
+  
+  .btn-login,
+  .btn-secondary,
+  .btn-wholesale-entry {
+    min-height: 44px;
+    padding: 0.75rem 1.25rem;
+  }
+  
+  .form-grid { grid-template-columns: repeat(2, 1fr); }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  input[type="time"],
+  select,
+  textarea {
+    min-height: 44px;
+    padding: 0.75rem 1rem;
+    font-size: 16px;
+  }
+  
+  .container { padding: 2rem; }
+}
+
+/* Small phones (max 360px) */
+@media (max-width: 360px) {
+  .login-box { width: 100%; }
+  .login-body { padding: 0 0.75rem; }
+  
+  .login-sub { font-size: 1.1rem; }
+  .login-note { font-size: 0.85rem; }
+  
+  .btn-login,
+  .btn-secondary,
+  .btn-wholesale-entry {
+    font-size: 0.9rem;
+    padding: 0.7rem 0.9rem;
+  }
+  
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.25rem; }
+  
+  .container { padding: 1rem; }
+  
+  .login-svg-logo { max-height: 90px; }
+}
+
+/* Landscape orientation adjustments */
+@media (max-height: 500px) and (orientation: landscape) {
+  .login-box { padding-bottom: 1.5rem; }
+  .login-body { padding: 0 1rem; }
+  
+  .welcome-art { margin-bottom: 0.5rem; }
+  .welcome-art-frame {
+    width: clamp(80px, 20vh, 120px);
+    height: clamp(80px, 20vh, 120px);
+  }
+  
+  .login-sub { margin-bottom: 0.35rem; }
+  .login-note { margin-bottom: 0.75rem; }
+  
+  .login-actions { gap: 0.5rem; }
+}
+
+/* Accessibility - Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

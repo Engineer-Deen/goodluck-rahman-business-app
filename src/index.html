@@ -2,14 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Good Luck Rahman Enterprise</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0, user-scalable=yes">
 <meta name="description" content="Good Luck Rahman Enterprise Management System">
 <meta name="theme-color" content="#0d1b2a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GLRE">
+<meta name="msapplication-TileColor" content="#0d1b2a">
+<meta name="format-detection" content="telephone=no">
+<meta name="apple-touch-fullscreen" content="yes">
 <!-- SVG Favicon (modern browsers) -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' rx='16' fill='%231a2d44'/%3E%3Cpolygon points='40,4 56,14 66,32 64,52 50,64 30,64 16,52 14,32 24,14' fill='none' stroke='%23f5c842' stroke-width='2'/%3E%3Ccircle cx='40' cy='38' r='22' fill='%230f2035'/%3E%3Cpath d='M33,22 C31,16 35,13 33,8' fill='none' stroke='%23f5c842' stroke-width='1.5' stroke-linecap='round'/%3E%3Cpath d='M40,20 C42,14 38,11 40,6' fill='none' stroke='%23f5c842' stroke-width='1.8' stroke-linecap='round'/%3E%3Cpath d='M47,22 C49,16 45,13 47,8' fill='none' stroke='%23f5c842' stroke-width='1.5' stroke-linecap='round'/%3E%3Cellipse cx='40' cy='50' rx='17' ry='4.5' fill='%23c9a227'/%3E%3Cpath d='M23,43 Q20,52 29,57 Q40,62 51,57 Q60,52 57,43Z' fill='%230f2035' stroke='%23c9a227' stroke-width='1.2'/%3E%3Cellipse cx='40' cy='43' rx='17' ry='4.5' fill='none' stroke='%23c9a227' stroke-width='1.4'/%3E%3Cpath d='M29,41 Q37,35 48,41 Q54,45 50,51 Q44,54 36,51 Q29,47 29,41Z' fill='none' stroke='%23f5c842' stroke-width='1.2' opacity='0.9'/%3E%3Cline x1='23' y1='24' x2='53' y2='39' stroke='%23f5c842' stroke-width='2.2' stroke-linecap='round'/%3E%3Cline x1='29' y1='18' x2='60' y2='33' stroke='%23f5c842' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<title>Good Luck Rahman Enterprise</title>
 </head>
 <body>
 
@@ -889,11 +895,52 @@
   </div>
 </div>
 
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
-<script src="script.js"></script>
+<script>
+      const GLR_FIREBASE_CDN_BASE = 'https://www.gstatic.com/firebasejs/9.22.2';
+      const GLR_FIREBASE_SCRIPTS = [
+        `${GLR_FIREBASE_CDN_BASE}/firebase-app-compat.js`,
+        `${GLR_FIREBASE_CDN_BASE}/firebase-auth-compat.js`,
+        `${GLR_FIREBASE_CDN_BASE}/firebase-firestore-compat.js`,
+        `${GLR_FIREBASE_CDN_BASE}/firebase-storage-compat.js`,
+      ];
+
+      window.loadFirebaseCdnScripts = async function loadFirebaseCdnScripts() {
+        if (!navigator.onLine) {
+          console.warn('Offline mode detected: skipping Firebase CDN load.');
+          return;
+        }
+        for (const src of GLR_FIREBASE_SCRIPTS) {
+          await new Promise((resolve) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.defer = true;
+            script.onload = () => resolve();
+            script.onerror = () => {
+              console.warn('Failed to load Firebase script:', src);
+              resolve();
+            };
+            document.head.appendChild(script);
+          });
+        }
+        if (typeof window.initFirebase === 'function') {
+          window.initFirebase();
+        }
+      };
+
+      window.addEventListener('online', () => {
+        if (!window.firebase) {
+          window.loadFirebaseCdnScripts().catch(() => {
+            console.warn('Firebase CDN load failed after reconnecting online.');
+          });
+        }
+      });
+    </script>
+    <script src="script.js"></script>
+    <script>
+      window.loadFirebaseCdnScripts().catch(() => {
+        console.warn('Firebase CDN load failed or timed out.');
+      });
+    </script>
 </body>
 </html>
 
