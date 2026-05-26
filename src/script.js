@@ -1621,6 +1621,9 @@ const ADMIN_EMAIL='abduldeenkamara06@gmail.com';
 const ADMIN_PASSWORD='10737';
 const AUTO_SYNC_INTERVAL_MS=30000;
 let syncRetryCountOnline=0;  // Track retry attempts
+let remoteDataUnsubscribe=null;
+let lastRemoteSnapshotHash='';
+let remoteListenerInitialSnapshot=true;
 
 function initFirebase(){
   if(firebaseApp||!window.firebase||!firebase.initializeApp) return;
@@ -1633,6 +1636,11 @@ function initFirebase(){
   }catch(_e){}
   firebaseStore=firebase.firestore();
   firebaseStorage=firebase.storage();
+  if(firebaseStore && typeof firebaseStore.enablePersistence === 'function'){
+    firebaseStore.enablePersistence({ synchronizeTabs:true }).catch((err)=>{
+      console.warn('Firestore persistence not enabled:', err);
+    });
+  }
   loadWholesaleRegisteredUsersSync();
   void refreshWholesaleEmailDeliveryFromFirestore();
   void refreshWholesaleRegisteredUsers({ network:true });
@@ -1742,6 +1750,7 @@ async function handleUserSignedIn(user){
   const runFirestoreRestore=async()=>{
     try{
       await loadUserDataFromFirestore();
+      attachRemoteFirestoreListener(user);
     }catch(e){
       console.error('Firestore load failed',e);
       const overlay=document.getElementById('login-overlay');
@@ -1853,7 +1862,111 @@ async function firebaseSignUp(email,password){
 }
 
 async function firebaseSignOut(){
+  if(remoteDataUnsubscribe){
+    try{ remoteDataUnsubscribe(); }catch(_e){}
+    remoteDataUnsubscribe=null;
+    lastRemoteSnapshotHash='';
+  }
   if(firebaseAuth) return firebaseAuth.signOut();
+}
+
+function detachRemoteFirestoreListener(){
+  if(typeof remoteDataUnsubscribe === 'function'){
+    try{ remoteDataUnsubscribe(); }catch(_e){}
+  }
+  remoteDataUnsubscribe = null;
+  lastRemoteSnapshotHash = '';
+}
+
+function attachRemoteFirestoreListener(user){
+  if(!firebaseStore || !user || !navigator.onLine || typeof firebaseStore.collection !== 'function') return;
+  detachRemoteFirestoreListener();
+  try{
+    const docRef = firebaseStore.collection('users').doc(user.uid);
+    remoteDataUnsubscribe = docRef.onSnapshot(async (snapshot)=>{
+      if(!snapshot.exists) return;
+      if(snapshot.metadata && snapshot.metadata.hasPendingWrites) return;
+      const data = snapshot.data();
+      if(!data) return;
+      const hash = JSON.stringify({
+        sales:data.sales||[],
+        inventory:data.inventory||[],
+        audit:data.audit||[],
+        profile:data.profile||{},
+        syncState:data.syncState||{},
+      });
+      if(hash === lastRemoteSnapshotHash) return;
+      lastRemoteSnapshotHash = hash;
+      const isInitial = remoteListenerInitialSnapshot;
+      remoteListenerInitialSnapshot = false;
+      await mergeRemoteFirestoreSnapshotData(data, isInitial);
+    }, (err)=>{
+      console.warn('Firestore realtime listener error:', err);
+    });
+  }catch(err){
+    console.warn('Failed to attach Firestore listener:', err);
+  }
+}
+
+async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false){
+  const user=getCurrentUser();
+  const normalized=normalizeAccountId(user?.email || getCurrentAccount());
+  const queue=DB.getSyncQueue();
+  const pendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+  const pendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+  const pendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
+  let changed=false;
+  const currentSales=DB.getSales();
+  const currentInventory=DB.getInventory();
+  const currentAudit=DB.getAudit();
+  if(Array.isArray(data.sales)){
+    const merged=mergeRemoteRecords(currentSales, data.sales, pendingSaleIds);
+    if(JSON.stringify(merged) !== JSON.stringify(currentSales)){
+      DB.setSales(merged);
+      changed=true;
+    }
+  }
+  if(Array.isArray(data.inventory)){
+    const merged=mergeRemoteRecords(currentInventory, data.inventory, pendingInventoryIds);
+    if(JSON.stringify(merged) !== JSON.stringify(currentInventory)){
+      DB.setInventory(merged, normalized);
+      changed=true;
+    }
+  }
+  if(Array.isArray(data.audit)){
+    const merged=mergeRemoteRecords(currentAudit, data.audit, pendingAuditIds);
+    if(JSON.stringify(merged) !== JSON.stringify(currentAudit)){
+      DB.setAudit(merged);
+      changed=true;
+    }
+  }
+  const hasPendingProfileUpdate = queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo');
+  if(data.profile && !hasPendingProfileUpdate){
+    DB.setScoped(OWNER_PROFILE_KEY, data.profile, normalized);
+    changed=true;
+    renderOwnerProfile();
+  }
+  if(data.profile?.pin){
+    setOwnerPin(data.profile.pin, normalized);
+    changed=true;
+  }
+  if(data.pin){
+    setOwnerPin(data.pin, normalized);
+    changed=true;
+  }
+  if(data.syncState){
+    DB.setSyncState(data.syncState, normalized);
+    changed=true;
+  }
+  if(changed){
+    refreshSyncBadge();
+    renderDashboard();
+    renderSessionTable();
+    renderRecords();
+    if(!isInitialSnapshot){
+      toast('Cloud updates received from another device.','success');
+    }
+  }
 }
 
 initFirebase();
@@ -2592,10 +2705,50 @@ function uploadOwnerPhoto(){
       reader.onload = function(event){
         const imageData = event.target.result;
         // Save to local storage
-        DB.set('owner_photo', imageData);
-        // Sync to backend
+        // Determine the current account to scope the photo
+        const primaryEmail = getCurrentAccount() || getPrimaryAccountEmail();
+        const normalizedEmail = normalizeAccountId(primaryEmail || '');
+        if(normalizedEmail){
+          // Persist photo into the scoped owner profile so saveUserDataToFirestore includes it
+          const profile = getOwnerProfileData(normalizedEmail);
+          const fullName = profile?.name || '';
+          const contact = profile?.contact || '';
+          const provider = profile?.authProvider || 'local';
+          // Save profile with photo (this writes to scoped storage)
+          saveOwnerProfile(normalizedEmail, fullName, contact, imageData, provider);
+          // Also keep a scoped owner_photo fallback key
+          DB.setScoped('owner_photo', imageData, normalizedEmail);
+        } else {
+          // No account available: store globally as fallback
+          DB.set('owner_photo', imageData);
+        }
+        // Sync to backend (queued op); the profile.photo above will be uploaded during sync
         const ownerData = { type: 'owner_photo', imageData, uploadedAt: new Date().toISOString() };
         queueSync('update_owner_photo', ownerData);
+
+        // If online, attempt immediate cloud sync so photo is available across devices without manual steps
+        if(navigator.onLine){
+          // If Firebase auth is available and user is signed in, write profile directly for fastest visibility
+          if(typeof firebaseAuth !== 'undefined' && getCurrentUser()){
+            saveUserDataToFirestore().then(()=>{
+              refreshSyncBadge();
+              toast('Photo uploaded and synced to cloud.','success');
+            }).catch(err=>{
+              console.warn('Immediate profile upload failed, will retry:', err);
+              // Ensure there's a scheduled retry
+              scheduleOfflineSyncRetry();
+              toast('Photo saved locally. Will sync automatically when network stabilizes.','warning');
+            });
+          } else {
+            // Fallback: run the general syncToCloud which pushes queued ops
+            syncToCloud(false).then((r)=>{
+              toast('Photo uploaded and synced to cloud.','success');
+            }).catch((err)=>{
+              console.warn('Sync-to-cloud failed after photo upload:', err);
+              toast('Photo saved locally. Will sync automatically when online.','warning');
+            });
+          }
+        }
         // Update login ring
         const img = document.getElementById('owner-login-img');
         if(img){ img.src = imageData; img.style.display = 'block'; }
@@ -2663,6 +2816,28 @@ if(document.readyState==='interactive' || document.readyState==='complete'){
 } else {
   document.addEventListener('DOMContentLoaded', startupInitialize);
 }
+
+// Ensure loader hides even if initialization throws earlier errors.
+window.addEventListener('load', ()=>{
+  try{
+    hideAppLoader();
+    const overlay=document.getElementById('login-overlay');
+    if(overlay && overlay.style.display==='none') overlay.style.display='flex';
+  }catch(_e){}
+});
+
+// Fallback: force hide app loader after a short timeout so users aren't stuck on a spinner
+setTimeout(()=>{
+  try{
+    const loader=document.getElementById('app-loader');
+    if(loader && loader.style.display!== 'none'){
+      console.warn('Forcing hideAppLoader fallback');
+      hideAppLoader();
+      const overlay=document.getElementById('login-overlay');
+      if(overlay) overlay.style.display='flex';
+    }
+  }catch(_e){}
+}, 2500);
 
 window.addEventListener('error', function(event){
   hideAppLoader();
@@ -2757,6 +2932,7 @@ async function ensureCloudAccountForLocalUser(){
 window.addEventListener('online',async ()=>{
   checkNet();
   await ensureCloudAccountForLocalUser();
+  attachRemoteFirestoreListener(getCurrentUser());
   const hasPending=DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
   if(hasPending){
     toast('Internet restored! Backing up offline data...','info');
@@ -3577,8 +3753,16 @@ async function syncToCloud(silent=false){
   try{
     if(syncUrl){
       try{
-        const res=await fetch(syncUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),timeout:20000});
-        if(!res.ok)throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(()=>controller.abort(), 20000) : null;
+        const res = await fetch(syncUrl,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload),
+          signal:controller?.signal,
+        });
+        if(timeoutId) clearTimeout(timeoutId);
+        if(!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         googleSheetSuccess=true;
       }catch(e){
         console.error('Google Sheets sync failed:',e);
