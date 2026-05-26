@@ -19,8 +19,8 @@
   "author": "Good Luck Rahman",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^30.0.0",
-    "electron-builder": "^24.6.0",
+    "electron": "^30.5.1",
+    "electron-builder": "^26.8.1",
     "electron-packager": "^17.1.2"
   },
   "dependencies": {
@@ -30,6 +30,7 @@
   "build": {
     "appId": "com.goodluck.rahman",
     "productName": "Good Luck Rahman Enterprise",
+    "asar": true,
     "files": [
       "src/**/*",
       "package.json",

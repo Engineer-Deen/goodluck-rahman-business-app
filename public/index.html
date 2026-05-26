@@ -2,17 +2,125 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0, user-scalable=yes">
+  <meta name="description" content="Good Luck Rahman Enterprise - Password Reset">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="GLRE">
+  <meta name="msapplication-TileColor" content="#0f172a">
+  <meta name="format-detection" content="telephone=no">
   <title>Good Luck Rahman Enterprise</title>
   <style>
-    body { font-family: Arial, sans-serif; background:#f5f7fb; margin:0; padding:0; color:#1e293b; }
-    .container { max-width:580px; margin:6rem auto; background:#fff; border-radius:16px; box-shadow:0 20px 50px rgba(15,23,42,.08); padding:2.5rem; }
-    h1 { margin:0 0 0.5rem; font-size:2rem; color:#0f172a; }
-    p { line-height:1.6; margin:1rem 0; }
-    .button { display:inline-flex; align-items:center; justify-content:center; padding:0.9rem 1.4rem; border-radius:999px; background:#1d4ed8; color:#fff; text-decoration:none; font-weight:600; border:none; cursor:pointer; }
-    .button.secondary { background:#e2e8f0; color:#0f172a; }
-    .note { margin-top:1.5rem; color:#475569; font-size:0.95rem; }
-    .alert { padding:1rem 1.2rem; border-radius:12px; border:1px solid #cbd5e1; background:#f8fafc; color:#0f172a; margin-top:1rem; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: #f5f7fb;
+      color: #1e293b;
+      min-height: 100vh;
+      padding: 1rem;
+    }
+    
+    .container {
+      max-width: 580px;
+      margin: 2rem auto;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+      padding: 2rem;
+    }
+    
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: clamp(1.5rem, 5vw, 2rem);
+      color: #0f172a;
+    }
+    
+    p {
+      line-height: 1.6;
+      margin: 1rem 0;
+      font-size: 1rem;
+    }
+    
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.9rem 1.4rem;
+      border-radius: 999px;
+      background: #1d4ed8;
+      color: #fff;
+      text-decoration: none;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      font-size: 1rem;
+      min-height: 44px;
+      touch-action: manipulation;
+      transition: background 0.2s ease, transform 0.15s ease;
+      width: 100%;
+      max-width: 300px;
+    }
+    
+    .button:active { transform: scale(0.98); }
+    .button:hover { background: #1e40af; }
+    
+    .button.secondary {
+      background: #e2e8f0;
+      color: #0f172a;
+    }
+    
+    .button.secondary:hover { background: #cbd5e1; }
+    
+    .note {
+      margin-top: 1.5rem;
+      color: #475569;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+    
+    .alert {
+      padding: 1rem 1.2rem;
+      border-radius: 12px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      color: #0f172a;
+      margin-top: 1rem;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+    
+    /* Mobile responsiveness */
+    @media (max-width: 480px) {
+      body { padding: 0.75rem; }
+      
+      .container {
+        margin: 1.5rem auto;
+        padding: 1.5rem;
+        border-radius: 12px;
+      }
+      
+      h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+      p { font-size: 0.95rem; margin: 0.75rem 0; }
+      
+      .button {
+        padding: 0.85rem 1.25rem;
+        font-size: 0.95rem;
+        width: 100%;
+        max-width: 100%;
+      }
+      
+      .alert { padding: 0.85rem 1rem; font-size: 0.9rem; }
+      .note { font-size: 0.9rem; margin-top: 1rem; }
+    }
+    
+    @media (max-width: 360px) {
+      .container { padding: 1.25rem; }
+      h1 { font-size: 1.25rem; }
+      p { font-size: 0.9rem; }
+      .button { padding: 0.75rem 1rem; font-size: 0.9rem; }
+    }
   </style>
 </head>
 <body>
