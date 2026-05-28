@@ -379,7 +379,11 @@
         <div class="card-title">New Sale</div>
         <div class="form-grid">
           <div class="form-group"><label>Customer Name</label><input type="text" id="s-customer" placeholder="Enter full name"></div>
-          <div class="form-group"><label>Product</label><select id="s-product" onchange="fillCost()"><option value=""> Select Product </option></select></div>
+      <div class="form-group"><label>Product</label>
+        <input type="text" id="s-product-search" class="auth-input" placeholder="Search product..." autocomplete="off" list="s-product-list" oninput="filterSaleProducts()">
+        <datalist id="s-product-list"></datalist>
+        <select id="s-product" onchange="fillCost()"><option value=""> Select Product </option></select>
+      </div>
           <div class="form-group"><label>Selling Price (NLe)</label><input type="number" id="s-price" placeholder="0.00" oninput="calcSale()"></div>
           <div class="form-group"><label>Quantity</label><input type="number" id="s-qty" value="1" min="1" oninput="calcSale()"></div>
         </div>
@@ -606,7 +610,11 @@
           <p style="color:var(--text-secondary);font-size:.9rem;margin-bottom:1rem;">Create new wholesale sales transactions with automatic Firebase Storage syncing.</p>
           <div class="form-grid">
             <div class="form-group"><label>Reseller Name</label><input type="text" id="ws-customer" placeholder="Enter reseller name"></div>
-            <div class="form-group"><label>Product</label><select id="ws-product"><option value=""> Select Product </option></select></div>
+            <div class="form-group"><label>Product</label>
+              <input type="text" id="ws-product-search" class="auth-input" placeholder="Search product..." autocomplete="off" list="ws-product-list" oninput="filterWholesaleProducts()">
+              <datalist id="ws-product-list"></datalist>
+              <select id="ws-product"><option value=""> Select Product </option></select>
+            </div>
             <div class="form-group"><label>Selling Price (NLe)</label><input type="number" id="ws-price" placeholder="0.00"></div>
             <div class="form-group"><label>Quantity</label><input type="number" id="ws-qty" value="1" min="1"></div>
           </div>

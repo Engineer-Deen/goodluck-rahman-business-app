@@ -86,7 +86,7 @@ async function buildRelease(platform) {
     args.push('--mac');
   }
 
-  args.push('--publish', 'never', '--config.publish.provider=generic', '--config.publish.url=https://goodluckrahmanenterprise.netlify.app/', `--config.directories.output=${outputDir}`);
+  args.push('--publish', 'never', `--config.directories.output=${outputDir}`);
 
   await runCommand(process.execPath, args, root);
   const info = await stat(outputDir);

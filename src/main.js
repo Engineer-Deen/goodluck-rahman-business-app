@@ -49,7 +49,7 @@ app.on('open-url', (event, url) => {
 
 const store = new Store({ name: 'goodluck-data' });
 const UPDATE_FEED_URL_KEY = 'glr_update_feed_url';
-const DEFAULT_UPDATE_FEED_URL = 'https://goodluckrahmanenterprise.netlify.app/';
+const DEFAULT_UPDATE_FEED_URL = '';
 let mainWindow = null;
 let autoUpdaterInitialized = false;
 let staticHttpServer = null;
@@ -190,7 +190,12 @@ function setupDevHotReload(win) {
 
 function getUpdateFeedUrl() {
   const val = store.get(UPDATE_FEED_URL_KEY);
-  const feedUrl = typeof val === 'string' ? val.trim() : '';
+  let feedUrl = typeof val === 'string' ? val.trim() : '';
+  if (feedUrl === 'https://goodluckrahmanenterprise.netlify.app/') {
+    // Migrate old Netlify default feed out of stored config so GitHub Releases can be used.
+    store.delete(UPDATE_FEED_URL_KEY);
+    feedUrl = '';
+  }
   return feedUrl || DEFAULT_UPDATE_FEED_URL;
 }
 
@@ -207,12 +212,13 @@ function setupAutoUpdater() {
   if (!app.isPackaged || autoUpdaterInitialized) return;
   autoUpdaterInitialized = true;
   const feedUrl = getUpdateFeedUrl();
-  if (!feedUrl) return;
   try {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.autoRunAppAfterInstall = true;
-    applyUpdateFeedUrl(feedUrl);
+    if (feedUrl) {
+      applyUpdateFeedUrl(feedUrl);
+    }
   } catch (_err) {
     // Skip updater setup if config is invalid.
   }
