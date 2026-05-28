@@ -172,7 +172,7 @@ const EXPLICIT_LOGOUT_KEY='glr_explicit_logout';
 const OWNER_PROFILE_KEY='glr_owner_profile';
 const ACCOUNT_INDEX_KEY='glr_account_index';
 const SYNC_URL_KEY='glr_sync_url';
-const UPDATE_URL_HELP='Example: https://goodluckrahmanenterprise.netlify.app/';
+const UPDATE_URL_HELP='Use only for a custom generic feed URL; GitHub Releases works automatically when the app is built with GitHub publish config.';
 let syncDebounceTimer=null;
 let syncInProgress=false;
 let syncIntervalTimer=null;
@@ -242,8 +242,34 @@ function saveOwnerProfile(email, fullName, contact, photo, provider='local'){
     updateRegisteredAccountIndex(oldEmail, false);
   }
   updateRegisteredAccountIndex(normalized, true);
+  if(document.getElementById('admin-registered-users-list')){
+    renderRegisteredUsersList();
+  }
   return saved;
 }
+
+function maybeRefreshAdminUserView(){
+  if(document.getElementById('admin-registered-users-list')){
+    renderRegisteredUsersList();
+  }
+}
+
+async function deleteFirebaseUserDataByEmail(email){
+  if(!firebaseStore || !email) return false;
+  try{
+    const normalized = normalizeAccountId(email);
+    const querySnapshot = await firebaseStore.collection('users').where('email','==',normalized).get();
+    if(querySnapshot.empty) return false;
+    const deletes = [];
+    querySnapshot.forEach(doc => deletes.push(doc.ref.delete()));
+    await Promise.all(deletes);
+    return true;
+  }catch(err){
+    console.warn('deleteFirebaseUserDataByEmail failed:', err);
+    return false;
+  }
+}
+
 function titleCase(value){
   if(!value) return '';
   return value.toString().trim().split(/\s+/).map(word=>word.charAt(0).toUpperCase()+word.slice(1).toLowerCase()).join(' ');
@@ -266,6 +292,9 @@ function removeMainAppUser(email){
   DB.deleteScoped('glr_sync_queue', normalized);
   DB.deleteScoped('glr_sync_state', normalized);
   updateRegisteredAccountIndex(normalized, false);
+  if(document.getElementById('admin-registered-users-list')){
+    renderRegisteredUsersList();
+  }
   return true;
 }
 function getRegisteredAccountIndex(){
@@ -352,8 +381,19 @@ async function deleteMainAppUser(){
     return;
   }
   const deleted = removeMainAppUser(email);
+  let remoteDeleted = false;
+  if(deleted && firebaseStore){
+    try{
+      remoteDeleted = await deleteFirebaseUserDataByEmail(email);
+    }catch(err){
+      console.error('Remote user deletion failed:', err);
+    }
+  }
   if(deleted){
-    if(statusEl){ statusEl.textContent='User deleted successfully.'; statusEl.style.color='var(--success)'; }
+    if(statusEl){
+      statusEl.textContent = 'User deleted successfully.' + (remoteDeleted ? ' Remote record also removed.' : '');
+      statusEl.style.color='var(--success)';
+    }
     if(emailEl) emailEl.value='';
     renderRegisteredUsersList();
     const normalizedCurrent = normalizeAccountId(getCurrentAccount() || getCurrentUser()?.email);
@@ -1380,6 +1420,34 @@ function resetAuthButtons(){
 }
 function initLoginScreen(){
   resetAuthButtons();
+  
+  // Initialize connection monitoring on login screen
+  updateConnectionStatusUI(lastNetworkOnline !== false);
+  
+  // Check connection status every 3 seconds while on login screen
+  const connectionCheckInterval = setInterval(() => {
+    const overlayVisible = document.getElementById('login-overlay')?.style.display !== 'none';
+    if(!overlayVisible){
+      clearInterval(connectionCheckInterval);
+      // Clean up the status bar if we leave login screen
+      const statusBar = document.getElementById('connection-status-bar');
+      if(statusBar) statusBar.remove();
+    } else {
+      checkAndUpdateConnectionStatus();
+    }
+  }, 3000);
+  
+  // Also listen for online/offline events for instant feedback
+  window.addEventListener('online', () => {
+    updateConnectionStatusUI(true);
+    toast('✅ Internet connection restored', 'success');
+  });
+  
+  window.addEventListener('offline', () => {
+    updateConnectionStatusUI(false);
+    toast('❌ Internet connection lost', 'warning');
+  });
+  
   if(shouldUsePinMode()){
     setLoginMode('pin');
   } else {
@@ -1387,9 +1455,17 @@ function initLoginScreen(){
   }
 }
 async function showAppAndInit(nextPanel='dashboard'){
+  // Clean up connection status bar before showing main app
+  const statusBar = document.getElementById('connection-status-bar');
+  if(statusBar) statusBar.remove();
+  
   document.getElementById('login-overlay').style.display='none';
   document.getElementById('app').style.display='flex';
   await new Promise(requestAnimationFrame);
+  if(navigator.onLine){
+    await ensureCloudAccountForLocalUser();
+    attachRemoteFirestoreListener(getCurrentUser());
+  }
   initApp();
   if(nextPanel){
     showPanel(nextPanel);
@@ -1626,7 +1702,7 @@ let lastRemoteSnapshotHash='';
 let lastLocalFirestoreWriteAt=0;
 let remoteListenerInitialSnapshot=true;
 
-function initFirebase(){
+async function initFirebase(){
   if(firebaseApp||!window.firebase||!firebase.initializeApp) return;
   if(!FIREBASE_CONFIG.apiKey||!FIREBASE_CONFIG.authDomain||!FIREBASE_CONFIG.projectId) return;
   firebaseApp=firebase.initializeApp(FIREBASE_CONFIG);
@@ -1651,6 +1727,10 @@ function initFirebase(){
       await handleUserSignedIn(user);
     }
   });
+  if(navigator.onLine){
+    await ensureCloudAccountForLocalUser();
+    attachRemoteFirestoreListener(getCurrentUser());
+  }
 }
 
 function showAdminSecretButton(){
@@ -2227,34 +2307,144 @@ async function completeLocalAuthentication(email){
   await showAppAndInit();
 }
 
+/**
+ * Test actual internet connectivity by attempting a lightweight connection.
+ * More reliable than navigator.onLine which can be misleading.
+ * @returns {Promise<boolean>} true if internet is available
+ */
+async function testInternetConnectivity(){
+  try {
+    // Try a simple HEAD request to a reliable CDN endpoint
+    // Using a no-cache query parameter to prevent cached responses
+    const response = await Promise.race([
+      fetch('https://www.gstatic.com/generate_204', { 
+        method: 'HEAD', 
+        cache: 'no-store',
+        mode: 'no-cors' 
+      }),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), 5000)
+      )
+    ]);
+    return true;
+  } catch(err){
+    return false;
+  }
+}
+
+/**
+ * Show connection status indicator on the login screen.
+ * @param {boolean} isOnline - whether device has internet connection
+ */
+function updateConnectionStatusUI(isOnline){
+  const overlay = document.getElementById('login-overlay');
+  if(!overlay) return;
+  
+  let statusEl = document.getElementById('connection-status-bar');
+  
+  if(isOnline){
+    if(statusEl){
+      statusEl.remove();
+    }
+    lastNetworkOnline = true;
+  } else {
+    if(!statusEl){
+      statusEl = document.createElement('div');
+      statusEl.id = 'connection-status-bar';
+      statusEl.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(90deg, #ff6b6b 0%, #ff4757 100%);
+        color: white;
+        padding: 0.75rem 1rem;
+        text-align: center;
+        font-weight: 600;
+        font-size: 0.95rem;
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      `;
+      statusEl.innerHTML = `
+        <span style="font-size:1.2rem;">⚠️</span>
+        <span>NO INTERNET CONNECTION • Email login not available • Use PIN to unlock</span>
+      `;
+      document.body.insertBefore(statusEl, document.body.firstChild);
+    }
+    lastNetworkOnline = false;
+  }
+}
+
+/**
+ * Check connection status and update UI.
+ * Call this periodically to monitor connectivity changes.
+ */
+async function checkAndUpdateConnectionStatus(){
+  const isOnline = await testInternetConnectivity();
+  if(isOnline !== lastNetworkOnline){
+    updateConnectionStatusUI(isOnline);
+    
+    // Show toast notification of status change
+    if(isOnline){
+      toast('✅ Internet connection restored', 'success');
+    } else {
+      toast('❌ Internet connection lost', 'warning');
+    }
+  }
+}
+
 async function doLogin(){
   const email=(document.getElementById('auth-email')||{}).value?.trim();
   const password=(document.getElementById('auth-password')||{}).value?.trim();
   const el=document.getElementById('login-error');
   const loginButton=document.getElementById('login-submit-btn');
   const originalText = loginButton?.textContent || 'LOG IN';
+  
   if(!email||!password){
     el.textContent='Please enter email and password.';
     return;
   }
+  
   if(loginButton){
     loginButton.disabled=true;
     loginButton.textContent='Logging in...';
   }
+  
   await new Promise(requestAnimationFrame);
   const profile=getOwnerProfileData();
   const isRegisteredEmail = profile.email.toLowerCase()===email.toLowerCase();
   const localAuth = localAuthenticate(email,password);
+  
   if(localAuth){
     await completeLocalAuthentication(email);
     return;
   }
+  
   if(firebaseAuth){
-    if(!navigator.onLine){
-      el.textContent = 'Internet is required to log in with email and password. Use PIN unlock when offline.';
+    // Test actual internet connectivity with improved detection
+    const hasInternet = await testInternetConnectivity();
+    
+    if(!hasInternet){
+      el.innerHTML = `
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <span style="font-size:1.5rem;">📡</span>
+          <div>
+            <strong>No Internet Connection Detected</strong>
+            <br>
+            <small>You are currently offline. Email login requires internet access.</small>
+            <br>
+            <small style="margin-top:0.3rem; display:block;">💡 Try using PIN unlock instead (if available), or connect to the internet and try again.</small>
+          </div>
+        </div>
+      `;
       if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
       return;
     }
+    
     try{
       justLoggedIn=true;
       await firebaseSignIn(email,password);
@@ -2288,17 +2478,25 @@ async function doLogin(){
       } else if(err?.code === 'auth/user-not-found' || err?.code === 'auth/invalid-login-credentials'){
         message = isRegisteredEmail ? 'Account deleted or incorrect password. Please register a new account or verify your credentials.' : 'No account found with that email. Please register or check your email.';
       } else if(err?.code === 'auth/network-request-failed' || /network|offline|timeout/i.test(err?.message||'')){
-        message = 'Unable to connect to the internet. Check your connection and try again.';
+        // Double-check: if we get a network error, inform user to check connection
+        const recheck = await testInternetConnectivity();
+        if(!recheck){
+          message = '📡 Internet connection lost. Unable to verify your credentials. Please check your connection and try again.';
+        } else {
+          message = 'Unable to reach the authentication server. This may be a temporary issue. Please try again.';
+        }
       }
       el.textContent = message;
       if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
       return;
     }
   }
+  
   if(localAuth){
     await completeLocalAuthentication(email);
     return;
   }
+  
   el.textContent = isRegisteredEmail ? 'Incorrect password. Please try again.' : 'Incorrect email or password. Please try again.';
   if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
 }
@@ -2490,6 +2688,7 @@ async function doLogout(force=false){
   if(emailEl) emailEl.value='';
   if(passEl) passEl.value='';
   setLoginMode('welcome');
+  initLoginScreen();
 }
 
 let toastTimer=null;
@@ -3019,21 +3218,24 @@ function checkNet(){
   return online;
 }
 async function ensureCloudAccountForLocalUser(){
-  if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()) return;
-  if(getCurrentUser()) return;
+  if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()) return false;
+  if(getCurrentUser()) return true;
   const primary=getPrimaryAccountEmail();
   const profile=primary?getOwnerProfileData(primary):getOwnerProfileData();
-  if(!profile.email) return;
+  if(!profile.email) return false;
   const password=getUserPassword(profile.email);
-  if(!password) return;
+  if(!password) return false;
   try{
     await firebaseSignIn(profile.email,password);
-    return;
+    attachRemoteFirestoreListener(getCurrentUser());
+    return true;
   }catch(err){
     if(err?.code === 'auth/user-not-found' && profile.authProvider === 'local'){
       try{
         await firebaseSignUp(profile.email,password);
         toast('Local account synced to Firebase successfully.','success');
+        attachRemoteFirestoreListener(getCurrentUser());
+        return true;
       }catch(signUpErr){
         if(signUpErr?.code === 'auth/email-already-in-use'){
           toast('This email already exists in Firebase. Please sign in manually.','warning');
@@ -3042,6 +3244,7 @@ async function ensureCloudAccountForLocalUser(){
     } else if(err?.code === 'auth/wrong-password'){
       toast('Unable to sync offline data to Firebase because stored password is invalid. Please sign in manually once online.','warning');
     }
+    return false;
   }
 }
 
@@ -3119,16 +3322,45 @@ function saveEditInventory(){
 }
 function populateProductDropdown(){
   const inv=DB.getInventory();
-  const sel=document.getElementById('s-product');const cur=sel.value;
-  sel.innerHTML='<option value="">- Select Product -</option>'+inv.map((p)=>`<option value="${p.id}">${p.name}</option>`).join('');
-  sel.value=cur;
-  // Also populate wholesale dropdown if it exists
+  const sel=document.getElementById('s-product');
   const wsSel=document.getElementById('ws-product');
-  if(wsSel){
-    const wsCur=wsSel.value;
-    wsSel.innerHTML='<option value="">- Select Product -</option>'+inv.map((p)=>`<option value="${p.id}">${p.name}</option>`).join('');
-    wsSel.value=wsCur;
+  const searchList=document.getElementById('s-product-list');
+  const wsSearchList=document.getElementById('ws-product-list');
+  const cur=sel?.value || '';
+  const wsCur=wsSel?.value || '';
+  const options = '<option value="">- Select Product -</option>' + inv.map((p)=>`<option value="${p.id}">${p.name}</option>`).join('');
+  if(sel){ sel.innerHTML = options; if(cur && inv.some(p=>p.id===cur)) sel.value=cur; }
+  if(wsSel){ wsSel.innerHTML = options; if(wsCur && inv.some(p=>p.id===wsCur)) wsSel.value=wsCur; }
+  if(searchList){ searchList.innerHTML = inv.map((p)=>`<option value="${p.name}">`).join(''); }
+  if(wsSearchList){ wsSearchList.innerHTML = inv.map((p)=>`<option value="${p.name}">`).join(''); }
+}
+
+function filterProductDropdown(selectId, query){
+  const inv=DB.getInventory();
+  const sel=document.getElementById(selectId);
+  if(!sel) return;
+  const normalized=(query||'').trim().toLowerCase();
+  const current=sel.value;
+  const filtered = inv.filter(p=>!normalized || p.name.toLowerCase().includes(normalized));
+  sel.innerHTML = '<option value="">- Select Product -</option>' + filtered.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  if(current && filtered.some(p=>p.id===current)){
+    sel.value=current;
+  } else if(filtered.length===1){
+    sel.value=filtered[0].id;
   }
+  if(selectId==='s-product'){
+    fillCost();
+  }
+}
+
+function filterSaleProducts(){
+  const query=(document.getElementById('s-product-search')||{}).value || '';
+  filterProductDropdown('s-product', query);
+}
+
+function filterWholesaleProducts(){
+  const query=(document.getElementById('ws-product-search')||{}).value || '';
+  filterProductDropdown('ws-product', query);
 }
 
 // SALES

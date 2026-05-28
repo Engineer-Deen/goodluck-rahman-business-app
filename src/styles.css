@@ -897,7 +897,30 @@ body::before {
   margin-bottom: 1.75rem;
   letter-spacing: 0.04em;
 }
-.login-error { color: var(--danger); font-size: 0.9rem; margin-top: 0.95rem; min-height: 1.2em; text-align: left; }
+.login-error { 
+  color: var(--danger); 
+  font-size: 0.9rem; 
+  margin-top: 0.95rem; 
+  min-height: 1.2em; 
+  text-align: left;
+  padding: 0.75rem;
+  background-color: rgba(255, 107, 107, 0.1);
+  border-left: 3px solid var(--danger);
+  border-radius: 3px;
+  line-height: 1.5;
+}
+
+.login-error small {
+  display: block;
+  color: rgba(255, 107, 107, 0.9);
+  font-size: 0.85rem;
+  margin-top: 0.4rem;
+}
+
+.login-error strong {
+  color: var(--danger);
+  font-weight: 600;
+}
 
 .btn-login {
   width: 100%;
