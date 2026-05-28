@@ -28,50 +28,9 @@
     <button id="login-back-button" class="login-back" onclick="onLoginBackClick()" style="display:none;">
       ← Back
     </button>
-    <!-- Brand banner with SVG logo -->
+    <!-- Brand banner with logo image -->
     <div class="login-banner">
-      <svg class="login-svg-logo" viewBox="0 0 260 130" xmlns="http://www.w3.org/2000/svg" aria-label="Good Luck Rahman Enterprise Logo">
-        <defs>
-          <linearGradient id="lg1" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" style="stop-color:#ffe066"/>
-            <stop offset="50%" style="stop-color:#f5c842"/>
-            <stop offset="100%" style="stop-color:#c9a227"/>
-          </linearGradient>
-          <linearGradient id="lg2" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" style="stop-color:#ffe57a"/>
-            <stop offset="100%" style="stop-color:#c9a227"/>
-          </linearGradient>
-        </defs>
-        <!-- Octagon ring -->
-        <g transform="translate(54,65)">
-          <polygon points="0,-46 32.5,-32.5 46,0 32.5,32.5 0,46 -32.5,32.5 -46,0 -32.5,-32.5" fill="none" stroke="url(#lg1)" stroke-width="1.2"/>
-          <polygon points="0,-39 27.5,-27.5 39,0 27.5,27.5 0,39 -27.5,27.5 -39,0 -27.5,-27.5" fill="none" stroke="#c9a227" stroke-width="0.4" opacity="0.4"/>
-          <circle r="36" fill="#0f2035"/>
-          <!-- Steam -->
-          <path d="M-7,-18 C-9,-24 -5,-28 -7,-34" fill="none" stroke="#f5c842" stroke-width="1.2" stroke-linecap="round" opacity="0.8"/>
-          <path d="M0,-16 C2,-23 -2,-27 0,-34" fill="none" stroke="#f5c842" stroke-width="1.4" stroke-linecap="round"/>
-          <path d="M7,-18 C9,-24 5,-28 7,-34" fill="none" stroke="#f5c842" stroke-width="1.2" stroke-linecap="round" opacity="0.8"/>
-          <!-- Bowl -->
-          <ellipse cx="0" cy="11" rx="22" ry="5.5" fill="url(#lg1)"/>
-          <path d="M-22,3 Q-25,13 -16,18 Q0,23 16,18 Q25,13 22,3Z" fill="#0f2035" stroke="#c9a227" stroke-width="1"/>
-          <ellipse cx="0" cy="3" rx="22" ry="5.5" fill="none" stroke="url(#lg1)" stroke-width="1.3"/>
-          <!-- Noodle -->
-          <path d="M-11,1 Q-3,-5 9,1 Q15,5 11,10 Q4,14 -4,10 Q-11,6 -11,1Z" fill="none" stroke="#f5c842" stroke-width="1.1" opacity="0.9"/>
-          <!-- Chopsticks -->
-          <line x1="-14" y1="-14" x2="18" y2="1" stroke="url(#lg1)" stroke-width="2" stroke-linecap="round"/>
-          <line x1="-5" y1="-18" x2="27" y2="-3" stroke="url(#lg1)" stroke-width="2" stroke-linecap="round"/>
-          <circle cx="18" cy="1" r="1.8" fill="#f5c842"/>
-          <circle cx="27" cy="-3" r="1.8" fill="#f5c842"/>
-          <!-- Diamond dots -->
-          <polygon points="46,0 49,-3 52,0 49,3" fill="#f5c842" opacity="0.7"/>
-          <polygon points="-46,0 -49,-3 -52,0 -49,3" fill="#f5c842" opacity="0.7"/>
-        </g>
-        <!-- Wordmark right side -->
-        <text x="116" y="50" font-family="Georgia,serif" font-size="8" fill="#8aa0b8" letter-spacing="3.5" text-anchor="start">GOOD LUCK</text>
-        <text x="112" y="74" font-family="Georgia,serif" font-size="24" fill="url(#lg2)" letter-spacing="3" text-anchor="start" font-weight="bold">RAHMAN</text>
-        <line x1="112" y1="80" x2="248" y2="80" stroke="#1e3a5f" stroke-width="0.8"/>
-        <text x="112" y="93" font-family="Arial,sans-serif" font-size="7.5" fill="#4a6080" letter-spacing="5" text-anchor="start">ENTERPRISE</text>
-      </svg>
+      <img class="login-svg-logo" src="assets/logo.png" alt="Good Luck Rahman Enterprise Logo" onerror="this.style.display='none'">
       <div class="login-divider"></div>
     </div>
 

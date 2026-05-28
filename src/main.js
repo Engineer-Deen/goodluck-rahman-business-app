@@ -304,11 +304,10 @@ ipcMain.handle('updater:check', async () => {
     return { ok: false, message: 'Updates only run in packaged app.' };
   }
   const feedUrl = getUpdateFeedUrl();
-  if (!feedUrl) {
-    return { ok: false, message: 'Update URL is not configured.' };
-  }
   try {
-    applyUpdateFeedUrl(feedUrl);
+    if (feedUrl) {
+      applyUpdateFeedUrl(feedUrl);
+    }
     const result = await autoUpdater.checkForUpdates();
     if (!result || !result.updateInfo) {
       return { ok: true, message: 'No update information available right now.' };

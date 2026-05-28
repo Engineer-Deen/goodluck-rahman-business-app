@@ -1916,7 +1916,11 @@ async function loadUserDataFromFirestore(){
   const pendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
   const pendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
   if(data.sales) DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, pendingSaleIds, true));
-  if(data.inventory) DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, pendingInventoryIds));
+  if(data.inventory){
+    DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, pendingInventoryIds));
+    renderInventory();
+    populateProductDropdown();
+  }
   if(data.audit) DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, pendingAuditIds));
   if(data.profile && !queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo')){
     DB.setScoped(OWNER_PROFILE_KEY, data.profile, normalized);
@@ -1983,7 +1987,8 @@ function attachRemoteFirestoreListener(user){
     const docRef = firebaseStore.collection('users').doc(user.uid);
     remoteDataUnsubscribe = docRef.onSnapshot(async (snapshot)=>{
       if(!snapshot.exists) return;
-      if(snapshot.metadata && snapshot.metadata.hasPendingWrites) return;
+      // Process snapshots even if they include pending local writes. mergeRemoteFirestoreSnapshotData
+      // will avoid clobbering pending local changes by using the sync queue and pending IDs.
       const data = snapshot.data();
       if(!data) return;
       const hash = JSON.stringify({
@@ -2030,6 +2035,8 @@ async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false, s
     if(JSON.stringify(merged) !== JSON.stringify(currentInventory)){
       DB.setInventory(merged, normalized);
       changed=true;
+      renderInventory();
+      populateProductDropdown();
     }
   }
   if(Array.isArray(data.audit)){
@@ -2073,6 +2080,8 @@ async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false, s
       const merged=mergeRemoteRecords(DB.getInventory(), data.inventory, updatedPendingInventoryIds);
       if(JSON.stringify(merged) !== JSON.stringify(DB.getInventory())){
         DB.setInventory(merged, normalized);
+        renderInventory();
+        populateProductDropdown();
       }
     }
     if(Array.isArray(data.audit)){
@@ -4291,9 +4300,6 @@ async function checkForUpdatesOnStartup(){
   try{
     const isPackaged = await window.electronAPI.isPackagedApp();
     if(!isPackaged) return;
-    const cfg = await window.electronAPI.getUpdateConfig();
-    const feedUrl=(cfg?.feedUrl||'').trim();
-    if(!feedUrl) return;
     const res = await window.electronAPI.checkForAppUpdates();
     if(res?.ok && res.updateAvailable){
       toast(`New update available: version ${res.version}. It will download and install automatically when ready.`, 'success');
@@ -4411,20 +4417,7 @@ async function performUpdateCheck(){
     const cfg=await window.electronAPI.getUpdateConfig();
     let feedUrl=(cfg?.feedUrl||'').trim();
     if(!feedUrl){
-      const entered=(window.prompt(`Paste your app update feed URL.\n${UPDATE_URL_HELP}`)||'').trim();
-      if(!entered){
-        setUpdatePanelStatus('Update URL not provided.','warning');
-        if(checkBtn){ checkBtn.disabled=false; checkBtn.textContent='CHECK FOR UPDATE'; }
-        return;
-      }
-      const setRes=await window.electronAPI.setUpdateFeedUrl(entered);
-      if(!setRes?.ok){
-        setUpdatePanelStatus(setRes?.message||'Failed to save update URL.','danger');
-        if(checkBtn){ checkBtn.disabled=false; checkBtn.textContent='CHECK FOR UPDATE'; }
-        return;
-      }
-      feedUrl=entered;
-      setUpdatePanelStatus('Update feed URL saved. Checking now...','success');
+      setUpdatePanelStatus('Checking app updates using GitHub Releases...','success');
     }
 
     const currentVersion = typeof window.electronAPI.getAppVersion === 'function'
