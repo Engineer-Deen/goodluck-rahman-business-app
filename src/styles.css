@@ -790,14 +790,23 @@ body::before {
   z-index: 2;
 }
 
-/* ── LOGIN SVG LOGO ── */
+/* ── LOGIN LOGO IMAGE ── */
 .login-svg-logo {
-  width: 100%;
-  max-width: 280px;
+  width: auto;
+  max-width: 260px;
+  max-height: 110px;
   height: auto;
   display: block;
   margin: 0 auto 0.4rem;
-  overflow: visible;
+  object-fit: contain;
+}
+
+.login-logo-text {
+  text-align: center;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+  margin-top: 0.3rem;
 }
 
 .login-banner {

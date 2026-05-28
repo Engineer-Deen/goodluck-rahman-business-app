@@ -71,10 +71,26 @@ The project uses `electron-builder` for packaging:
 
 ## Release updates for Windows
 
-- Build a Windows update release:
+### Local manual release
+- Bump the version in `package.json` before publishing.
+- Build and publish a Windows release from your local machine:
   ```bash
-  npm run release:update:win
+  npx electron-builder --win nsis --x64 --publish always
   ```
+- This creates the installer, the `.exe.blockmap`, and uploads the release to GitHub Releases.
+
+### GitHub Actions release automation
+- Push a tag that starts with `v`, for example:
+  ```bash
+  git tag v4.5.8
+  git push origin v4.5.8
+  ```
+- The workflow in `.github/workflows/release.yml` will run and publish the release automatically.
+- Make sure the workflow has permissions set for `contents: write` so it can create releases and upload assets.
+
+### Notes for private repo users
+- GitHub Actions can still publish from a private repository.
+- The release assets must be publicly accessible if you want end users to download updates without authentication.
 
 ## Build Output Folders
 
