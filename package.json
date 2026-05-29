@@ -1,6 +1,6 @@
 {
   "name": "goodluck-rahman-enterprise",
-  "version": "4.6.1",
+  "version": "4.6.2",
   "description": "Good Luck Rahman Enterprise desktop app",
   "main": "src/main.js",
   "scripts": {
@@ -35,7 +35,8 @@
     "files": [
       "src/**/*",
       "package.json",
-      "package-lock.json"
+      "package-lock.json",
+      ".env.local"
     ],
     "directories": {
       "buildResources": "src/assets",

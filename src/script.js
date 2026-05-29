@@ -200,6 +200,33 @@ function setOwnerPin(pin, accountEmail){
   const acct=normalizeAccountId(accountEmail||getCurrentAccount()||getPrimaryAccountEmail());
   DB.setScoped(OWNER_PIN_KEY, pin.trim(), acct);
 }
+function simpleHashPassword(password){
+  let hash=0;
+  if(!password||password.length===0) return hash.toString();
+  for(let i=0;i<password.length;i++){
+    const char=password.charCodeAt(i);
+    hash=((hash<<5)-hash)+char;
+    hash=hash&hash;
+  }
+  return Math.abs(hash).toString();
+}
+function isPasswordHash(value){
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+async function hashPasswordForStorage(password){
+  if(!password) return '';
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+function getUserPassword(accountEmail){
+  return DB.getScoped(USER_PASSWORD_KEY, accountEmail) || '';
+}
+function setUserPassword(password, accountEmail){
+  if(!password) return;
+  DB.setScoped(USER_PASSWORD_KEY, password, accountEmail);
+}
 function isExplicitLogout(){
   return DB.get(EXPLICIT_LOGOUT_KEY)===true;
 }
@@ -438,13 +465,6 @@ function renderOwnerProfile(){
   if(emailInput) emailInput.value=profile.email||'';
   if(createdEl) createdEl.textContent = profile.createdAt && profile.createdAt !== '-' ? new Date(profile.createdAt).toLocaleString() : 'Not set';
 }
-function getUserPassword(accountEmail){
-  return DB.getScoped(USER_PASSWORD_KEY, accountEmail) || '';
-}
-function setUserPassword(password, accountEmail){
-  if(!password) return;
-  DB.setScoped(USER_PASSWORD_KEY, password, accountEmail);
-}
 function renderProfileSection(){
   const lockCard=document.getElementById('profile-lock-card');
   const detailsCard=document.getElementById('profile-details-card');
@@ -502,6 +522,9 @@ async function validateProfilePassword(password){
   if(!profile.email) return false;
   const storedPassword=getUserPassword();
   if(storedPassword){
+    if(isPasswordHash(storedPassword)){
+      return await hashPasswordForStorage(password)===storedPassword;
+    }
     return password === storedPassword;
   }
   if(firebaseAuth && getCurrentUser() && getCurrentUser().email===profile.email){
@@ -624,10 +647,16 @@ async function updateEmailPassword(){
         }
         await getCurrentUser().updateEmail(newEmailValue);
         await updateOwnerEmailConfig(newEmailValue);
+        const oldPassword = DB.getScoped(USER_PASSWORD_KEY, profile.email);
+        if(oldPassword){
+          DB.setScoped(USER_PASSWORD_KEY, oldPassword, normalizeAccountId(newEmailValue));
+          DB.deleteScoped(USER_PASSWORD_KEY, profile.email);
+        }
       }
       if(newPassword){
         await getCurrentUser().updatePassword(newPassword);
-        setUserPassword(newPassword);
+        await setUserPassword(newPassword, normalizeAccountId(newEmailValue));
+        await saveUserDataToFirestore();
       }
       saveOwnerProfile(newEmailValue, profile.name, profile.contact, profile.photo, profile.authProvider);
       document.getElementById('profile-current-password').value='';
@@ -646,10 +675,15 @@ async function updateEmailPassword(){
       return;
     }
     if(newEmailValue && newEmailValue !== profile.email){
+      const oldPassword = DB.getScoped(USER_PASSWORD_KEY, profile.email);
+      if(oldPassword){
+        DB.setScoped(USER_PASSWORD_KEY, oldPassword, normalizeAccountId(newEmailValue));
+        DB.deleteScoped(USER_PASSWORD_KEY, profile.email);
+      }
       saveOwnerProfile(newEmailValue, profile.name, profile.contact, profile.photo, profile.authProvider);
     }
     if(newPassword){
-      setUserPassword(newPassword);
+      await setUserPassword(newPassword);
     }
     document.getElementById('profile-current-password').value='';
     document.getElementById('profile-new-password').value='';
@@ -1569,7 +1603,7 @@ async function doPasswordResetRequest(){
   if(isFirebaseConfigured() && firebaseAuth){
     try{
       await sendPasswordResetEmailViaFirebase(email);
-      showForgotPasswordSentState('A password reset email has been sent. Follow the instructions in your inbox.', false);
+      showForgotPasswordSentState('A Firebase password reset email has been sent. Follow the instructions in your inbox to update your Firebase password.', false);
       return;
     }catch(err){
       console.error('Firebase password reset failed:', err);
@@ -1611,11 +1645,23 @@ async function doCompletePasswordReset(){
     if(errorEl) errorEl.textContent='Password must be at least 6 characters.';
     return;
   }
-  setUserPassword(newPassword, email.toLowerCase());
+  await setUserPassword(newPassword, email.toLowerCase());
+  if(isFirebaseConfigured() && firebaseAuth && firebaseAuth.currentUser && firebaseAuth.currentUser.email.toLowerCase() === email.toLowerCase()){
+    try{
+      await firebaseAuth.currentUser.updatePassword(newPassword);
+      toast('Password updated in Firebase and locally. You can now log in.','success');
+    }catch(err){
+      console.warn('Firebase password update failed during code reset:', err);
+      toast('Password reset locally. Please follow the Firebase reset email link to update the password in Firebase.','warning');
+    }
+  } else if(isFirebaseConfigured()){
+    toast('Password reset locally. If Firebase manages this account, use the reset email link sent to your inbox to update the Firebase password.','info');
+  } else {
+    toast('Password reset successfully. You can now log in.', 'success');
+  }
   DB.delete('glr_password_reset_code');
   DB.delete('glr_password_reset_email');
   if(errorEl) errorEl.textContent='';
-  toast('Password reset successfully. You can now log in.', 'success');
   switchLoginMode('login');
 }
 async function doResetPin(){
@@ -1658,7 +1704,7 @@ async function doResetPin(){
       return;
     }
   }
-  if(!localAuthenticate(email,password)){
+  if(!await localAuthenticate(email,password)){
     if(errorEl) errorEl.textContent='Email or password is incorrect.';
     return;
   }
@@ -1696,7 +1742,7 @@ let adminSecretClickCount=0;
 let adminSecretTimer=null;
 const ADMIN_EMAIL='abduldeenkamara06@gmail.com';
 const ADMIN_PASSWORD='10737';
-const AUTO_SYNC_INTERVAL_MS=30000;
+const AUTO_SYNC_INTERVAL_MS=800;
 let syncRetryCountOnline=0;  // Track retry attempts
 let remoteDataUnsubscribe=null;
 let lastRemoteSnapshotHash='';
@@ -1894,6 +1940,12 @@ async function saveUserDataToFirestore(){
   if(existingPin){
     profile.pin = existingPin;
   }
+  const existingPassword = DB.getScoped(USER_PASSWORD_KEY, normalized);
+  if(existingPassword){
+    profile.passwordHash = isPasswordHash(existingPassword)
+      ? existingPassword
+      : await hashPasswordForStorage(existingPassword);
+  }
   const docRef=firebaseStore.collection('users').doc(user.uid);
   await docRef.set({
     email:user.email,
@@ -1934,6 +1986,9 @@ async function loadUserDataFromFirestore(){
   }
   if(data.pin){
     setOwnerPin(data.pin, normalized);
+  }
+  if(data.profile?.passwordHash){
+    DB.setScoped(USER_PASSWORD_KEY, data.profile.passwordHash, normalized);
   }
   if(data.syncState){
     DB.setSyncState(data.syncState, normalized);
@@ -2107,10 +2162,6 @@ async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false, s
     }
   }
 }
-
-initFirebase();
-updateAuthActions();
-resolveOwnerEmailConfig().then(updateAuthActions).catch(()=>updateAuthActions());
 
 function getSyncUrl(){
   const saved=(DB.get(SYNC_URL_KEY)||'').trim();
@@ -2432,7 +2483,7 @@ async function doLogin(){
   await new Promise(requestAnimationFrame);
   const profile=getOwnerProfileData();
   const isRegisteredEmail = profile.email.toLowerCase()===email.toLowerCase();
-  const localAuth = localAuthenticate(email,password);
+  const localAuth = await localAuthenticate(email,password);
   
   if(localAuth){
     await completeLocalAuthentication(email);
@@ -2464,6 +2515,8 @@ async function doLogin(){
       justLoggedIn=true;
       await firebaseSignIn(email,password);
       setCurrentAccount(email);
+      await setUserPassword(password, email);
+      await saveUserDataToFirestore();
       return;
     }catch(err){
       console.error(err);
@@ -2472,6 +2525,8 @@ async function doLogin(){
           justLoggedIn=true;
           await firebaseSignUp(email,password);
           setCurrentAccount(email);
+          await setUserPassword(password, email);
+          await saveUserDataToFirestore();
           toast('Account created in Firebase and signed in successfully.','success');
           return;
         }catch(signUpErr){
@@ -2537,9 +2592,14 @@ async function doAdminLogin(){
   if(errorEl){ errorEl.textContent='Invalid admin login credentials.'; errorEl.style.display='block'; }
   if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
 }
-function localAuthenticate(email,password){
+async function localAuthenticate(email,password){
   const profile=getOwnerProfileData(email);
-  return profile.email.toLowerCase()===email.toLowerCase() && password===getUserPassword(email);
+  if(profile.email.toLowerCase()!==email.toLowerCase()) return false;
+  const storedPassword=getUserPassword(email);
+  if(isPasswordHash(storedPassword)){
+    return await hashPasswordForStorage(password)===storedPassword;
+  }
+  return password===storedPassword;
 }
 
 function buildSmsMessage(code){
@@ -2549,7 +2609,7 @@ function buildSmsMessage(code){
 async function saveLocalRegistration(email, ownerName, contact, password, pin, photo){
   setCurrentAccount(email);
   saveOwnerProfile(email, ownerName, contact, photo, 'local');
-  setUserPassword(password, email);
+  await setUserPassword(password, email);
   if(pin) setOwnerPin(pin, email);
   DB.setSales([], email);
   DB.setAudit([], email);
@@ -2558,7 +2618,13 @@ async function saveLocalRegistration(email, ownerName, contact, password, pin, p
   }
   setExplicitLogout(false);
   await showAppAndInit('dashboard');
-  toast('Account created locally. It will sync to Firebase when internet returns.','warning');
+  try{
+    await saveUserDataToFirestore();
+    toast('Account created and synced to Firebase.','success');
+  }catch(err){
+    console.error('Failed to sync account to Firebase:', err);
+    toast('Account created locally. It will sync to Firebase when internet returns.','warning');
+  }
 }
 
 function isFirebaseNetworkError(err){
@@ -2601,7 +2667,7 @@ async function doRegister(){
     if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
     return;
   }
-  saveLocalRegistration(email, ownerName, contact, password, pin, photo);
+  await saveLocalRegistration(email, ownerName, contact, password, pin, photo);
   if(firebaseAuth && navigator.onLine){
     try{
       justLoggedIn=true;
@@ -3130,14 +3196,25 @@ function loadOwnerPhoto(){
 }
 
 function startupInitialize(){
-  // Load Firebase config from Electron main process if available
-  if(window.electronAPI && window.electronAPI.getFirebaseConfig){
-    window.electronAPI.getFirebaseConfig().then(config=>{
-      if(config && config.apiKey){
-        Object.assign(FIREBASE_CONFIG, config);
-      }
-    }).catch(_e=>{});
+  const firebaseConfigPromise = (window.electronAPI && window.electronAPI.getFirebaseConfig)
+    ? window.electronAPI.getFirebaseConfig().then(config=>{
+        if(config && typeof config === 'object'){
+          if(config.apiKey){
+            Object.assign(FIREBASE_CONFIG, config);
+          } else {
+            console.warn('Firebase config returned from main process is missing apiKey.', config);
+          }
+        }
+      }).catch((err)=>{
+        console.warn('Failed to load Firebase config from main process:', err);
+      })
+    : Promise.resolve();
+
+  // Browser preview fallback: allow manual config injection for non-Electron runs.
+  if(!FIREBASE_CONFIG.apiKey && typeof window.FIREBASE_CONFIG === 'object' && window.FIREBASE_CONFIG.apiKey){
+    Object.assign(FIREBASE_CONFIG, window.FIREBASE_CONFIG);
   }
+
   loadOwnerPhoto();
   initLoginScreen();
   renderOwnerProfile();
@@ -3147,6 +3224,18 @@ function startupInitialize(){
   const overlay=document.getElementById('login-overlay');
   if(overlay) overlay.style.display='flex';
   hideAppLoader();
+
+  firebaseConfigPromise.then(()=>{
+    if(!FIREBASE_CONFIG.apiKey){
+      console.warn('Firebase config not found on startup. Cloud backup will remain disabled until config is loaded.');
+      if(typeof toast === 'function'){
+        toast('Firebase config is missing. Run the Electron app with .env.local or add a browser config in window.FIREBASE_CONFIG.','warning');
+      }
+    }
+    initFirebase();
+    updateAuthActions();
+    resolveOwnerEmailConfig().then(updateAuthActions).catch(()=>updateAuthActions());
+  });
 }
 
 if(document.readyState==='interactive' || document.readyState==='complete'){
@@ -4100,7 +4189,16 @@ async function syncToCloud(silent=false){
   const user=getCurrentUser();
   const canSaveFirestore=!!user && !!firebaseStore;
   if(!syncUrl && !canSaveFirestore){
-    if(!silent)toast('Cloud backup is not configured. Please sign in to Firebase or configure backup in Settings.','warning');
+    if(!silent){
+      if(isFirebaseConfigured() && !firebaseAuth){
+        toast('Cloud backup is not ready yet. Waiting for Firebase and retrying automatically.','info');
+      } else {
+        toast('Cloud backup is not configured. Please sign in to Firebase or configure backup in Settings.','warning');
+      }
+    }
+    if(isFirebaseConfigured() && !firebaseAuth){
+      scheduleOfflineSyncRetry();
+    }
     return false;
   }
   const queue=DB.getSyncQueue();
@@ -4194,7 +4292,7 @@ function scheduleOfflineSyncRetry(){
         stopOfflineSyncRetry();
       }
     }
-  },8000);
+  },2000);
 }
 
 function stopOfflineSyncRetry(){
@@ -4507,7 +4605,7 @@ function initApp(){
       if(currentPanelId !== 'admin'){
         toast('Resuming backup of offline data...','info');
       }
-      syncToCloud(true);
+      syncToCloud(false);
     }
   }
   startAutoSyncLoop();

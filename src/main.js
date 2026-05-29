@@ -5,7 +5,14 @@ const path = require('path');
 const { URL } = require('url');
 const Store = require('electron-store');
 const { autoUpdater } = require('electron-updater');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env.local') });
+const dotenv = require('dotenv');
+const envPath = path.join(__dirname, '..', '.env.local');
+const envResult = dotenv.config({ path: envPath });
+if (envResult.error) {
+  console.warn('Firebase config .env.local not loaded:', envPath, envResult.error.message || envResult.error);
+} else {
+  console.log('Firebase config loaded from .env.local');
+}
 
 const PROTOCOL_SCHEME = 'goodluckrahman';
 
