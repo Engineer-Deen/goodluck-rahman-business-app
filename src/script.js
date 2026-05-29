@@ -76,13 +76,14 @@ function sortInventoryByName(items){
 }
 
 const GOOGLE_SCRIPT_WEB_APP_URL=''; // Optional fallback. Preferred: set inside app when prompted.
+const GLR_ENV = (typeof process !== 'undefined' && process.env) ? process.env : {};
 const FIREBASE_CONFIG={
-  apiKey:process.env.FIREBASE_API_KEY||'',
-  authDomain:process.env.FIREBASE_AUTH_DOMAIN||'',
-  projectId:process.env.FIREBASE_PROJECT_ID||'',
-  storageBucket:process.env.FIREBASE_STORAGE_BUCKET||'',
-  messagingSenderId:process.env.FIREBASE_MESSAGING_SENDER_ID||'',
-  appId:process.env.FIREBASE_APP_ID||'',
+  apiKey:GLR_ENV.FIREBASE_API_KEY||'',
+  authDomain:GLR_ENV.FIREBASE_AUTH_DOMAIN||'',
+  projectId:GLR_ENV.FIREBASE_PROJECT_ID||'',
+  storageBucket:GLR_ENV.FIREBASE_STORAGE_BUCKET||'',
+  messagingSenderId:GLR_ENV.FIREBASE_MESSAGING_SENDER_ID||'',
+  appId:GLR_ENV.FIREBASE_APP_ID||'',
 };
 /**
  * Wholesales email verification: register users in WHOLESALE_REGISTERED_USERS and/or Firestore meta/appConfig.wholesaleAllowedUsers.
@@ -1730,6 +1731,9 @@ async function initFirebase(){
   if(navigator.onLine){
     await ensureCloudAccountForLocalUser();
     attachRemoteFirestoreListener(getCurrentUser());
+    if(getCurrentUser()){
+      await loadUserDataFromFirestore();
+    }
   }
 }
 
@@ -1983,9 +1987,11 @@ function detachRemoteFirestoreListener(){
 function attachRemoteFirestoreListener(user){
   if(!firebaseStore || !user || !navigator.onLine || typeof firebaseStore.collection !== 'function') return;
   detachRemoteFirestoreListener();
+  remoteListenerInitialSnapshot = true;
+  lastRemoteSnapshotHash = '';
   try{
     const docRef = firebaseStore.collection('users').doc(user.uid);
-    remoteDataUnsubscribe = docRef.onSnapshot(async (snapshot)=>{
+    remoteDataUnsubscribe = docRef.onSnapshot({ includeMetadataChanges: true }, async (snapshot)=>{
       if(!snapshot.exists) return;
       // Process snapshots even if they include pending local writes. mergeRemoteFirestoreSnapshotData
       // will avoid clobbering pending local changes by using the sync queue and pending IDs.
@@ -2132,7 +2138,7 @@ function queueSync(op,payload){
   refreshSyncBadge();
   if(navigator.onLine){
     if(syncDebounceTimer)clearTimeout(syncDebounceTimer);
-    syncDebounceTimer=setTimeout(()=>syncToCloud(true),800);
+    syncDebounceTimer=setTimeout(()=>syncToCloud(true),250);
   }
 }
 
@@ -3124,6 +3130,14 @@ function loadOwnerPhoto(){
 }
 
 function startupInitialize(){
+  // Load Firebase config from Electron main process if available
+  if(window.electronAPI && window.electronAPI.getFirebaseConfig){
+    window.electronAPI.getFirebaseConfig().then(config=>{
+      if(config && config.apiKey){
+        Object.assign(FIREBASE_CONFIG, config);
+      }
+    }).catch(_e=>{});
+  }
   loadOwnerPhoto();
   initLoginScreen();
   renderOwnerProfile();
@@ -3261,6 +3275,9 @@ window.addEventListener('online',async ()=>{
   checkNet();
   await ensureCloudAccountForLocalUser();
   attachRemoteFirestoreListener(getCurrentUser());
+  if(getCurrentUser()){
+    await loadUserDataFromFirestore();
+  }
   const hasPending=DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
   if(hasPending){
     toast('Internet restored! Backing up offline data...','info');

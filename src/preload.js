@@ -38,4 +38,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateAvailable: (callback) => ipcRenderer.on('updater:update-available', (_event, info) => callback(info)),
   onUpdateDownloadProgress: (callback) => ipcRenderer.on('updater:download-progress', (_event, progress) => callback(progress)),
   onUpdateDownloaded: (callback) => ipcRenderer.on('updater:update-downloaded', (_event, info) => callback(info)),
+  getFirebaseConfig: () => ipcRenderer.invoke('firebase:get-config'),
 });

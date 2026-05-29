@@ -13,6 +13,7 @@ temp_build/
 .firebase/
 .firebaserc
 .env
+.env.local
 *.env
 *.local
 *.secret

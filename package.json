@@ -1,6 +1,6 @@
 {
   "name": "goodluck-rahman-enterprise",
-  "version": "4.6.0",
+  "version": "4.6.1",
   "description": "Good Luck Rahman Enterprise desktop app",
   "main": "src/main.js",
   "scripts": {
@@ -24,6 +24,7 @@
     "electron-packager": "^17.1.2"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "electron-store": "^8.2.0",
     "electron-updater": "^6.6.2"
   },
