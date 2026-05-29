@@ -77,12 +77,12 @@ function sortInventoryByName(items){
 
 const GOOGLE_SCRIPT_WEB_APP_URL=''; // Optional fallback. Preferred: set inside app when prompted.
 const FIREBASE_CONFIG={
-  apiKey:'REDACTED (Firebase API Key)',
-  authDomain:'REDACTED (Firebase Domain)',
-  projectId:'my-desktop-app-4ee05',
-  storageBucket:'my-desktop-app-4ee05.firebasestorage.app',
-  messagingSenderId:'REDACTED (Firebase Sender ID)',
-  appId:'1:REDACTED (Firebase Sender ID):web:1a0880f8952f9b11a7654e',
+  apiKey:process.env.FIREBASE_API_KEY||'',
+  authDomain:process.env.FIREBASE_AUTH_DOMAIN||'',
+  projectId:process.env.FIREBASE_PROJECT_ID||'',
+  storageBucket:process.env.FIREBASE_STORAGE_BUCKET||'',
+  messagingSenderId:process.env.FIREBASE_MESSAGING_SENDER_ID||'',
+  appId:process.env.FIREBASE_APP_ID||'',
 };
 /**
  * Wholesales email verification: register users in WHOLESALE_REGISTERED_USERS and/or Firestore meta/appConfig.wholesaleAllowedUsers.
