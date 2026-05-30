@@ -903,10 +903,11 @@
       });
     </script>
     <script>
-      // Load firebase config generated at build-time (public/firebase-config.json)
+      // Load firebase config generated at build-time.
+      // Use a relative path so the app works when hosted from a directory or deployed via Vercel.
       (function(){
         try{
-          fetch('/firebase-config.json', { cache: 'no-store' }).then(res=>{
+          fetch('firebase-config.json', { cache: 'no-store' }).then(res=>{
             if(!res.ok) return null;
             return res.json();
           }).then(cfg=>{
