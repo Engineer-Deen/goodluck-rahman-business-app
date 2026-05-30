@@ -902,6 +902,23 @@
         }
       });
     </script>
+    <script>
+      // Load firebase config generated at build-time (public/firebase-config.json)
+      (function(){
+        try{
+          fetch('/firebase-config.json', { cache: 'no-store' }).then(res=>{
+            if(!res.ok) return null;
+            return res.json();
+          }).then(cfg=>{
+            if(cfg && cfg.apiKey){
+              window.FIREBASE_CONFIG = cfg;
+            }
+          }).catch(()=>{
+            // ignore - web preview may not have the file
+          });
+        }catch(e){/* ignore */}
+      }());
+    </script>
     <script src="script.js"></script>
     <script>
       window.loadFirebaseCdnScripts().catch(() => {

@@ -598,6 +598,14 @@ function handleProfilePhotoSelected(event){
     const profile=getOwnerProfileData();
     saveOwnerProfile(profile.email, profile.name, profile.contact, photoData, profile.authProvider);
     renderOwnerProfile();
+    queueSync('update_owner_photo', {
+      type: 'owner_photo',
+      photo: photoData,
+      uploadedAt: new Date().toISOString(),
+    });
+    if(navigator.onLine){
+      syncToCloud(true).catch(()=>{});
+    }
     toast('Profile photo updated.','success');
   };
   reader.readAsDataURL(file);
@@ -666,6 +674,21 @@ async function updateEmailPassword(){
       toast('Account settings updated successfully.', 'success');
     }catch(err){
       console.error(err);
+      // Additional diagnostic: check sign-in methods for this email to help explain mismatches
+      if(firebaseAuth && email){
+        try{
+          const methods = await firebaseAuth.fetchSignInMethodsForEmail(email);
+          console.info('Firebase sign-in methods for', email, methods);
+          if(Array.isArray(methods) && methods.length && !methods.includes('password')){
+            // Account exists but doesn't use password sign-in
+            el.textContent = 'This email is registered using a different sign-in method (social login or SSO). Try that provider or reset your password.';
+            if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
+            return;
+          }
+        }catch(_e){
+          // ignore diagnostic failure
+        }
+      }
       const message = err?.message || 'Unable to update account settings. Please check your password and try again.';
       toast(message, 'danger');
     }
@@ -1498,6 +1521,7 @@ async function showAppAndInit(nextPanel='dashboard'){
   document.getElementById('app').style.display='flex';
   await new Promise(requestAnimationFrame);
   if(navigator.onLine){
+    await firebaseReadyPromise;
     await ensureCloudAccountForLocalUser();
     attachRemoteFirestoreListener(getCurrentUser());
   }
@@ -1748,6 +1772,7 @@ let remoteDataUnsubscribe=null;
 let lastRemoteSnapshotHash='';
 let lastLocalFirestoreWriteAt=0;
 let remoteListenerInitialSnapshot=true;
+let firebaseReadyPromise = Promise.resolve();
 
 async function initFirebase(){
   if(firebaseApp||!window.firebase||!firebase.initializeApp) return;
@@ -2436,8 +2461,8 @@ function updateConnectionStatusUI(isOnline){
         box-shadow: 0 2px 8px rgba(0,0,0,0.3);
       `;
       statusEl.innerHTML = `
-        <span style="font-size:1.2rem;">⚠️</span>
-        <span>NO INTERNET CONNECTION • Email login not available • Use PIN to unlock</span>
+        <span style="font-size:1rem;">⚠️</span>
+        <span>Offline mode — email login is unavailable. Use PIN unlock.</span>
       `;
       document.body.insertBefore(statusEl, document.body.firstChild);
     }
@@ -2483,63 +2508,33 @@ async function doLogin(){
   await new Promise(requestAnimationFrame);
   const profile=getOwnerProfileData();
   const isRegisteredEmail = profile.email.toLowerCase()===email.toLowerCase();
-  const localAuth = await localAuthenticate(email,password);
-  
-  if(localAuth){
-    await completeLocalAuthentication(email);
+  // Enforce online Firebase authentication for email/password logins.
+  // When offline, email logins are disabled — use PIN unlock instead.
+  if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()){
+    el.innerHTML = `
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <span style="font-size:1.2rem;">📡</span>
+        <div>
+          <strong>Offline</strong>
+          <br>
+          <small>Email/password login requires an internet connection. Use PIN unlock to access the app while offline.</small>
+        </div>
+      </div>
+    `;
+    if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
     return;
   }
-  
-  if(firebaseAuth){
-    // Test actual internet connectivity with improved detection
-    const hasInternet = await testInternetConnectivity();
-    
-    if(!hasInternet){
-      el.innerHTML = `
-        <div style="display:flex; align-items:center; gap:0.5rem;">
-          <span style="font-size:1.5rem;">📡</span>
-          <div>
-            <strong>No Internet Connection Detected</strong>
-            <br>
-            <small>You are currently offline. Email login requires internet access.</small>
-            <br>
-            <small style="margin-top:0.3rem; display:block;">💡 Try using PIN unlock instead (if available), or connect to the internet and try again.</small>
-          </div>
-        </div>
-      `;
-      if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
-      return;
-    }
-    
-    try{
-      justLoggedIn=true;
-      await firebaseSignIn(email,password);
-      setCurrentAccount(email);
-      await setUserPassword(password, email);
-      await saveUserDataToFirestore();
-      return;
-    }catch(err){
+
+  try{
+    justLoggedIn=true;
+    await firebaseSignIn(email,password);
+    setCurrentAccount(email);
+    await setUserPassword(password, email);
+    await saveUserDataToFirestore();
+    return;
+  }catch(err){
       console.error(err);
-      if(err?.code === 'auth/user-not-found' && localAuth){
-        try{
-          justLoggedIn=true;
-          await firebaseSignUp(email,password);
-          setCurrentAccount(email);
-          await setUserPassword(password, email);
-          await saveUserDataToFirestore();
-          toast('Account created in Firebase and signed in successfully.','success');
-          return;
-        }catch(signUpErr){
-          console.error('Auto Firebase sign-up failed:', signUpErr);
-          if(signUpErr?.code === 'auth/email-already-in-use'){
-            el.textContent = 'This email already exists in Firebase. Please sign in manually.';
-          } else {
-            el.textContent = 'Unable to complete remote sign-in. Please try again later.';
-          }
-          if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
-          return;
-        }
-      }
+      // Do not fall back to local authentication for email logins.
       let message = 'Login failed. Please check your email and password.';
       if(err?.code === 'auth/wrong-password'){
         message = 'Incorrect password. Please try again.';
@@ -2560,10 +2555,11 @@ async function doLogin(){
       if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
       return;
     }
-  }
   
   if(localAuth){
-    await completeLocalAuthentication(email);
+    // Local password-based logins are no longer accepted.
+    el.textContent = 'Email/password login is not available offline. Use PIN unlock.';
+    if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
     return;
   }
   
@@ -2667,32 +2663,39 @@ async function doRegister(){
     if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
     return;
   }
-  await saveLocalRegistration(email, ownerName, contact, password, pin, photo);
-  if(firebaseAuth && navigator.onLine){
-    try{
-      justLoggedIn=true;
-      const userCredential=await firebaseSignUp(email,password);
-      const user=userCredential.user;
-      if(user){
-        await saveUserDataToFirestore();
-        toast('Account created and synced successfully.', 'success');
-      }
-    }catch(err){
-      console.error(err);
-      if(err?.code === 'auth/email-already-in-use'){
-        toast('Account created locally. Firebase account already exists for this email.', 'warning');
-      } else if(err?.code === 'auth/invalid-email'){
-        toast('Account created locally. Remote sync failed: invalid email.', 'warning');
-      } else if(err?.code === 'auth/weak-password'){
-        toast('Account created locally. Remote sync failed: weak password.', 'warning');
-      } else if(isFirebaseNetworkError(err)){
-        toast('Account created locally. Remote sync will continue when the internet returns.', 'warning');
-      } else {
-        toast('Account created locally. Remote sync failed and will retry later.', 'warning');
-      }
+
+  // Enforce online Firebase registration. Do not create local-only accounts.
+  if(!firebaseAuth || !navigator.onLine || !isFirebaseConfigured()){
+    el.textContent = 'Registration requires an active internet connection. Please connect and try again.';
+    if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
+    return;
+  }
+
+  try{
+    justLoggedIn=true;
+    const userCredential = await firebaseSignUp(email, password);
+    const user = userCredential.user;
+    if(user){
+      // Persist locally after successful cloud registration
+      await saveLocalRegistration(email, ownerName, contact, password, pin, photo);
+      await saveUserDataToFirestore();
+      toast('Account created and synced successfully.', 'success');
     }
-  } else if(firebaseAuth){
-    toast('Account created locally. Remote sync will continue when the internet returns.', 'warning');
+  }catch(err){
+    console.error('Remote registration failed:', err);
+    if(err?.code === 'auth/email-already-in-use'){
+      el.textContent = 'An account already exists with this email. Please log in instead.';
+    } else if(err?.code === 'auth/invalid-email'){
+      el.textContent = 'Invalid email address. Please correct and try again.';
+    } else if(err?.code === 'auth/weak-password'){
+      el.textContent = 'Password is too weak. Choose a stronger password.';
+    } else if(isFirebaseNetworkError(err)){
+      el.textContent = 'Network error during registration. Please check your connection and try again.';
+    } else {
+      el.textContent = 'Registration failed. See console for details.';
+    }
+    if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
+    return;
   }
   if(registerButton){ registerButton.disabled=false; registerButton.textContent=originalText; }
 }
@@ -3225,7 +3228,14 @@ function startupInitialize(){
   if(overlay) overlay.style.display='flex';
   hideAppLoader();
 
-  firebaseConfigPromise.then(()=>{
+  const firebaseScriptPromise = (typeof window.loadFirebaseCdnScripts === 'function')
+    ? window.loadFirebaseCdnScripts().catch((err)=>{
+        console.warn('Firebase CDN load failed:', err);
+        return null;
+      })
+    : Promise.resolve(null);
+
+  firebaseReadyPromise = Promise.all([firebaseScriptPromise, firebaseConfigPromise]).then(async () => {
     if(!FIREBASE_CONFIG.apiKey){
       console.warn('Firebase config not found on startup. Cloud backup will remain disabled until config is loaded.');
       if(typeof toast === 'function'){
@@ -3234,7 +3244,9 @@ function startupInitialize(){
     }
     initFirebase();
     updateAuthActions();
-    resolveOwnerEmailConfig().then(updateAuthActions).catch(()=>updateAuthActions());
+    await resolveOwnerEmailConfig().then(updateAuthActions).catch(()=>updateAuthActions());
+  }).catch((err)=>{
+    console.warn('Firebase initialization sequence failed:', err);
   });
 }
 
@@ -3330,6 +3342,7 @@ function checkNet(){
   return online;
 }
 async function ensureCloudAccountForLocalUser(){
+  await firebaseReadyPromise;
   if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()) return false;
   if(getCurrentUser()) return true;
   const primary=getPrimaryAccountEmail();
@@ -3342,6 +3355,8 @@ async function ensureCloudAccountForLocalUser(){
     attachRemoteFirestoreListener(getCurrentUser());
     return true;
   }catch(err){
+    console.error('ensureCloudAccountForLocalUser failed for', profile.email, err);
+    // Provide actionable, non-sensitive feedback to the user and logs for debugging
     if(err?.code === 'auth/user-not-found' && profile.authProvider === 'local'){
       try{
         await firebaseSignUp(profile.email,password);
@@ -3349,12 +3364,21 @@ async function ensureCloudAccountForLocalUser(){
         attachRemoteFirestoreListener(getCurrentUser());
         return true;
       }catch(signUpErr){
+        console.error('Auto sign-up also failed for', profile.email, signUpErr);
         if(signUpErr?.code === 'auth/email-already-in-use'){
           toast('This email already exists in Firebase. Please sign in manually.','warning');
+        } else if(isFirebaseNetworkError(signUpErr)){
+          toast('Network error while syncing local account. Will retry when online.','warning');
+        } else {
+          toast('Unable to sync local account to Firebase. See console for details.','warning');
         }
       }
     } else if(err?.code === 'auth/wrong-password'){
       toast('Unable to sync offline data to Firebase because stored password is invalid. Please sign in manually once online.','warning');
+    } else if(isFirebaseNetworkError(err)){
+      toast('Network error while attempting cloud sign-in. Please check your connection.','warning');
+    } else {
+      toast('Unable to connect to Firebase. See console for details.','warning');
     }
     return false;
   }
@@ -4184,6 +4208,7 @@ async function syncToCloud(silent=false){
     if(!silent)toast('No internet. Data saved locally. Will sync when connected.','warning');
     return false;
   }
+  await firebaseReadyPromise;
   await ensureCloudAccountForLocalUser();
   const syncUrl=getSyncUrl();
   const user=getCurrentUser();
