@@ -20,12 +20,18 @@ if (process.platform === 'win32' && app.setAppUserModelId) {
   app.setAppUserModelId('com.goodluck.rahman');
 }
 
+const APP_USER_DATA_PATH = path.join(app.getPath('appData'), 'goodluck-rahman-enterprise');
 app.commandLine.appendSwitch('disable-gpu');
 app.commandLine.appendSwitch('disable-gpu-compositing');
-app.setPath('userData', path.join(app.getPath('appData'), 'goodluck-rahman-enterprise'));
+app.commandLine.appendSwitch('disable-application-cache');
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+app.commandLine.appendSwitch('user-data-dir', APP_USER_DATA_PATH);
+app.commandLine.appendSwitch('disk-cache-dir', path.join(APP_USER_DATA_PATH, 'Cache2'));
+app.setPath('userData', APP_USER_DATA_PATH);
 
 const gotInstanceLock = app.requestSingleInstanceLock();
 if (!gotInstanceLock) {
+  console.error('Another instance detected: quitting this instance');
   app.quit();
 }
 
@@ -53,6 +59,14 @@ app.on('second-instance', (_event, argv) => {
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleProtocolUrl(url);
+});
+
+app.on('before-quit', (e) => {
+  console.log('app.before-quit');
+});
+
+app.on('will-quit', (e) => {
+  console.log('app.will-quit');
 });
 
 const store = new Store({ name: 'goodluck-data' });
@@ -97,6 +111,7 @@ function staticRequestHandler(rootDir) {
       const u = new URL(req.url || '/', 'http://127.0.0.1');
       let pathname = u.pathname || '/';
       if (pathname === '/') pathname = '/index.html';
+      console.log('Local request for', pathname);
       const relative = pathname.replace(/^\/+/, '');
       const absolute = path.resolve(rootDir, relative);
       const rootResolved = path.resolve(rootDir);
@@ -107,6 +122,7 @@ function staticRequestHandler(rootDir) {
       }
       fs.readFile(absolute, (err, data) => {
         if (err) {
+          console.error('Static file read failed', absolute, err);
           res.writeHead(404);
           res.end('Not found');
           return;
@@ -115,7 +131,8 @@ function staticRequestHandler(rootDir) {
         res.writeHead(200, { 'Content-Type': STATIC_MIME[ext] || 'application/octet-stream' });
         res.end(data);
       });
-    } catch (_err) {
+    } catch (err) {
+      console.error('Static request handler error', err);
       res.writeHead(500);
       res.end();
     }
@@ -134,10 +151,58 @@ function loadWindowFromFile(win) {
 }
 
 function createWindow() {
+  console.log('createWindow(): starting local static server');
   const rootDir = __dirname;
   const server = http.createServer(staticRequestHandler(rootDir));
 
+  // In development, load the file directly to avoid local HTTP server/network issues
+  if (!app.isPackaged) {
+    console.log('Dev mode detected: loading index.html directly from file');
+    const win = createBrowserWindow();
+    console.log('createWindow: created BrowserWindow id=', win && win.id);
+    win.webContents.on('did-finish-load', () => {
+      console.log('Window loaded successfully (file):', win.webContents.getURL());
+    });
+    win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+      console.error('Window failed to load (file):', errorCode, errorDescription, validatedURL);
+    });
+    win.webContents.on('did-frame-finish-load', () => {
+      console.log('WebContents did frame finish load');
+    });
+    win.webContents.on('crashed', () => {
+      console.error('WebContents crashed');
+    });
+    win.webContents.on('render-process-gone', (_event, details) => {
+      console.error('Render process gone:', details.reason, details.exitCode);
+    });
+    win.on('ready-to-show', () => {
+      console.log('Window ready to show');
+      try{ win.show(); }catch(e){ console.error('Error showing window', e); }
+    });
+    try{
+      win.loadFile(path.join(__dirname, 'index.html'));
+    }catch(err){
+      console.error('loadFile exception:', err);
+    }
+    win.setMenuBarVisibility(false);
+    setupDevHotReload(win);
+    mainWindow = win;
+    try{
+      // Open DevTools in detached mode to capture renderer errors during development
+      win.webContents.openDevTools({ mode: 'detach' });
+      console.log('DevTools opened for debugging');
+    }catch(_e){ }
+    console.log('createWindow: mainWindow assigned id=', mainWindow && mainWindow.id);
+    setupAutoUpdater();
+    win.on('closed', () => {
+      console.log('Main window closed');
+      mainWindow = null;
+    });
+    return;
+  }
+
   const openWithFileFallback = () => {
+    console.log('createWindow(): falling back to file:// loader');
     if (mainWindow && !mainWindow.isDestroyed()) return;
     const win = createBrowserWindow();
     loadWindowFromFile(win);
@@ -152,13 +217,44 @@ function createWindow() {
     staticHttpServer = server;
     const addr = server.address();
     const port = typeof addr === 'object' && addr ? addr.port : 0;
+    console.log(`Local static server listening on port ${port}`);
     const win = createBrowserWindow();
-    win.loadURL(`http://127.0.0.1:${port}/index.html`);
+    console.log('createWindow: created BrowserWindow id=', win && win.id);
+    win.webContents.on('did-finish-load', () => {
+      console.log('Window loaded successfully:', win.webContents.getURL());
+    });
+    win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+      console.error('Window failed to load:', errorCode, errorDescription, validatedURL);
+    });
+    win.webContents.on('did-frame-finish-load', () => {
+      console.log('WebContents did frame finish load');
+    });
+    win.webContents.on('crashed', () => {
+      console.error('WebContents crashed');
+    });
+    win.webContents.on('render-process-gone', (_event, details) => {
+      console.error('Render process gone:', details.reason, details.exitCode);
+    });
+    win.on('ready-to-show', () => {
+      console.log('Window ready to show');
+      try{ win.show(); }catch(e){ console.error('Error showing window', e); }
+    });
+    // loadURL may throw or reject; capture any errors
+    try{
+      const loadResult = win.loadURL(`http://127.0.0.1:${port}/index.html`);
+      if (loadResult && typeof loadResult.then === 'function') {
+        loadResult.catch(err => console.error('loadURL rejected:', err));
+      }
+    }catch(err){
+      console.error('loadURL exception:', err);
+    }
     win.setMenuBarVisibility(false);
     setupDevHotReload(win);
     mainWindow = win;
+    console.log('createWindow: mainWindow assigned id=', mainWindow && mainWindow.id);
     setupAutoUpdater();
     win.on('closed', () => {
+      console.log('Main window closed');
       mainWindow = null;
       if (staticHttpServer) {
         try {
@@ -345,6 +441,7 @@ ipcMain.handle('updater:check', async () => {
 });
 
 app.whenReady().then(() => {
+  console.log('app.whenReady(): Electron is ready');
   if (!app.isDefaultProtocolClient(PROTOCOL_SCHEME)) {
     app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
   }
@@ -359,7 +456,16 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  console.log('app.window-all-closed: no more windows open');
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception in main process:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled rejection in main process:', reason, promise);
 });
