@@ -54,7 +54,7 @@
 
 .loader-subtitle {
   color: var(--text-dim);
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .loader-spinner {
@@ -1182,6 +1182,21 @@ tr:hover td { background: rgba(245,200,66,0.04); }
 .badge-info    { background: rgba(77,184,255,0.12); color: var(--info);  border: 1px solid rgba(77,184,255,0.3); }
 .badge-synced  { background: rgba(39,217,128,0.10); color: var(--success); border: 1px solid rgba(39,217,128,0.2); }
 .badge-pending { background: var(--warning-dim); color: var(--warning); border: 1px solid rgba(255,170,51,0.2); }
+
+.backup-status {
+  display: inline-block;
+  margin-left: 0.75rem;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  vertical-align: middle;
+  opacity: 0.85;
+}
+.backup-status.backup-success { color: var(--success); }
+.backup-status.backup-pending { color: var(--warning); }
+.backup-status.backup-failed { color: var(--danger); }
+
+.last-synced { display: inline-block; margin-left: 0.6rem; font-size: 0.66rem; color: var(--text-dim); vertical-align: middle; }
+.last-synced strong { color: var(--text-primary); font-weight:600; margin-right:0.25rem; }
 
 /* ── TOAST ── */
 #toast { position: fixed; bottom: 2rem; right: 2rem; background: var(--navy-card); border: 1px solid var(--border-strong); border-left: 3px solid var(--gold); border-radius: 3px; padding: 0.9rem 1.3rem; font-size: 0.9rem; z-index: 9998; transform: translateX(150%); transition: transform 0.3s ease; max-width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }

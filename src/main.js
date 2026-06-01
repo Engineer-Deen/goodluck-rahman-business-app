@@ -163,6 +163,12 @@ function createWindow() {
     win.webContents.on('did-finish-load', () => {
       console.log('Window loaded successfully (file):', win.webContents.getURL());
     });
+    // Forward renderer console messages to main process console for debugging
+    win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+      try{
+        console.log(`Renderer console [${level}] ${sourceId}:${line} ${message}`);
+      }catch(e){/* ignore */}
+    });
     win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
       console.error('Window failed to load (file):', errorCode, errorDescription, validatedURL);
     });
@@ -222,6 +228,12 @@ function createWindow() {
     console.log('createWindow: created BrowserWindow id=', win && win.id);
     win.webContents.on('did-finish-load', () => {
       console.log('Window loaded successfully:', win.webContents.getURL());
+    });
+    // Forward renderer console messages to main process console for debugging
+    win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+      try{
+        console.log(`Renderer console [${level}] ${sourceId}:${line} ${message}`);
+      }catch(e){/* ignore */}
     });
     win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
       console.error('Window failed to load:', errorCode, errorDescription, validatedURL);
@@ -317,7 +329,6 @@ function setupAutoUpdater() {
   autoUpdaterInitialized = true;
   const feedUrl = getUpdateFeedUrl();
   try {
-    autoUpdater.useDeltaUpdates = true;
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.autoRunAppAfterInstall = true;
@@ -469,4 +480,15 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled rejection in main process:', reason, promise);
+});
+
+// Receive forwarded logs from renderer
+ipcMain.on('renderer:console', (_event, level, message) => {
+  try{ console.log(`Renderer.${level}: ${message}`); }catch(_e){}
+});
+ipcMain.on('renderer:error', (_event, info) => {
+  try{ console.error('Renderer.error event:', info); }catch(_e){}
+});
+ipcMain.on('renderer:unhandledrejection', (_event, info) => {
+  try{ console.error('Renderer.unhandledrejection:', info); }catch(_e){}
 });

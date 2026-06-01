@@ -1,6 +1,6 @@
 {
   "name": "goodluck-rahman-enterprise",
-  "version": "4.6.7",
+  "version": "4.6.8",
   "description": "Good Luck Rahman Enterprise desktop app",
   "main": "src/main.js",
   "scripts": {
@@ -11,9 +11,7 @@
     "dist": "npm run package",
     "dist:exe": "npm run package",
     "dist:installer": "electron-builder --win nsis --x64 --config.directories.output=package-output/win",
-    "dist:web-installer": "electron-builder --win nsis-web --x64 --config.directories.output=package-output/win",
     "dist:portable": "electron-builder --win portable --x64 --config.directories.output=package-output/win",
-    "release:github": "electron-builder --win nsis --x64 --publish always --config.directories.output=package-output/win",
     "release:update": "node scripts/build-update-release.js",
     "release:update:win": "node scripts/build-update-release.js --platform=win",
     "package": "node scripts/package.js"
