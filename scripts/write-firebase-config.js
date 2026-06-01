@@ -15,24 +15,13 @@ const config = {
   databaseURL: getEnv('FIREBASE_DATABASE_URL'),
 };
 
-const outputDirs = [
-  path.join(__dirname, '..', 'public'),
-  path.join(__dirname, '..', 'src'),
-  path.join(__dirname, '..'),
-];
-let wroteCount = 0;
-for (const outDir of outputDirs) {
-  const outFile = path.join(outDir, 'firebase-config.json');
-  try {
-    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-    fs.writeFileSync(outFile, JSON.stringify(config, null, 2), { encoding: 'utf8' });
-    console.log('Wrote', outFile);
-    wroteCount++;
-  } catch (err) {
-    console.warn('Failed to write firebase config to', outFile, err?.message || err);
-  }
-}
-if (wroteCount === 0) {
-  console.error('Failed to write firebase-config.json to any output directory.');
+const outDir = path.join(__dirname, '..', 'public');
+const outFile = path.join(outDir, 'firebase-config.json');
+try{
+  if(!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(outFile, JSON.stringify(config, null, 2), { encoding: 'utf8' });
+  console.log('Wrote', outFile);
+} catch(err){
+  console.error('Failed to write firebase config:', err);
   process.exitCode = 1;
 }

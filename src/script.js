@@ -281,6 +281,11 @@ function setUserPassword(password, accountEmail){
   if(!password) return;
   DB.setScoped(USER_PASSWORD_KEY, password, accountEmail);
 }
+function clearStoredPasswordForAccount(accountEmail){
+  const normalized = normalizeAccountId(accountEmail);
+  if(!normalized) return;
+  DB.deleteScoped(USER_PASSWORD_KEY, normalized);
+}
 function isExplicitLogout(){
   return DB.get(EXPLICIT_LOGOUT_KEY)===true;
 }
@@ -619,6 +624,11 @@ function saveProfileChanges(){
     return;
   }
   const profile=getOwnerProfileData();
+  if(email !== profile.email && firebaseAuth && getCurrentUser()){
+    toast('To change your account email, use the security section below so Firebase can update it securely.','warning');
+    renderOwnerProfile();
+    return;
+  }
   const updatedProfile=saveOwnerProfile(email, fullName, contact, profile.photo, profile.authProvider);
   queueSync('update_profile', updatedProfile);
   toast('Profile details saved.','success');
@@ -681,7 +691,7 @@ async function updateEmailPassword(){
   const newPassword=(document.getElementById('profile-new-password')||{}).value?.trim();
   const confirmPassword=(document.getElementById('profile-confirm-password')||{}).value?.trim();
   if(!currentPassword){
-    toast('Enter your current password to update account.', 'warning');
+    toast('Enter your current password to update your account securely.', 'warning');
     return;
   }
   if(!newEmail && !newPassword){
@@ -697,76 +707,63 @@ async function updateEmailPassword(){
     return;
   }
   const profile=getOwnerProfileData();
-  const newEmailValue=newEmail || profile.email;
-  if(firebaseAuth && getCurrentUser()){
+  const currentUser=getCurrentUser();
+  const currentEmail=normalizeAccountId(profile.email);
+  const newEmailValue=normalizeAccountId(newEmail || profile.email);
+
+  if(firebaseAuth && currentUser && navigator.onLine){
     try{
-      const credential=firebase.auth.EmailAuthProvider.credential(profile.email, currentPassword);
-      await getCurrentUser().reauthenticateWithCredential(credential);
-      if(newEmailValue && newEmailValue !== profile.email){
-        if(!await canRegisterWithEmail(newEmailValue)){
-          toast('This email is not available for this account.','danger');
-          return;
-        }
-        await getCurrentUser().updateEmail(newEmailValue);
-        await updateOwnerEmailConfig(newEmailValue);
-        const oldPassword = DB.getScoped(USER_PASSWORD_KEY, profile.email);
-        if(oldPassword){
-          DB.setScoped(USER_PASSWORD_KEY, oldPassword, normalizeAccountId(newEmailValue));
-          DB.deleteScoped(USER_PASSWORD_KEY, profile.email);
-        }
+      const credential=firebase.auth.EmailAuthProvider.credential(currentEmail, currentPassword);
+      await currentUser.reauthenticateWithCredential(credential);
+
+      if(newEmailValue && newEmailValue !== currentEmail){
+        await currentUser.updateEmail(newEmailValue);
       }
       if(newPassword){
-        await getCurrentUser().updatePassword(newPassword);
-        await setUserPassword(newPassword, normalizeAccountId(newEmailValue));
-        await saveUserDataToFirestore();
+        await currentUser.updatePassword(newPassword);
       }
-      saveOwnerProfile(newEmailValue, profile.name, profile.contact, profile.photo, profile.authProvider);
+
+      const updatedProfile = saveOwnerProfile(newEmailValue, profile.name, profile.contact, profile.photo, profile.authProvider);
+      setCurrentAccount(newEmailValue);
+
+      const oldPassword = DB.getScoped(USER_PASSWORD_KEY, currentEmail);
+      if(oldPassword){
+        DB.setScoped(USER_PASSWORD_KEY, oldPassword, newEmailValue);
+        DB.deleteScoped(USER_PASSWORD_KEY, currentEmail);
+      }
+      if(newPassword){
+        await setUserPassword(newPassword, newEmailValue);
+      }
+
+      await updateOwnerEmailConfig(newEmailValue);
+      await saveUserDataToFirestore();
+
       document.getElementById('profile-current-password').value='';
       document.getElementById('profile-new-password').value='';
       document.getElementById('profile-confirm-password').value='';
       renderOwnerProfile();
-      toast('Account settings updated successfully.', 'success');
+      toast('Your email and password have been updated securely via Firebase.','success');
     }catch(err){
-      console.error(err);
-      // Additional diagnostic: check sign-in methods for this email to help explain mismatches
-      if(firebaseAuth && email){
-        try{
-          const methods = await firebaseAuth.fetchSignInMethodsForEmail(email);
-          console.info('Firebase sign-in methods for', email, methods);
-          if(Array.isArray(methods) && methods.length && !methods.includes('password')){
-            // Account exists but doesn't use password sign-in
-            el.textContent = 'This email is registered using a different sign-in method (social login or SSO). Try that provider or reset your password.';
-            if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
-            return;
-          }
-        }catch(_e){
-          // ignore diagnostic failure
-        }
+      console.error('updateEmailPassword failed:', err);
+      const code = err?.code || '';
+      if(code === 'auth/requires-recent-login'){
+        toast('Please sign out and sign in again before changing your email or password.','warning');
+      } else if(code === 'auth/email-already-in-use'){
+        toast('That email is already registered. Choose a different email or sign in with the existing account.','danger');
+      } else if(code === 'auth/invalid-email'){
+        toast('Enter a valid email address to update your account.','danger');
+      } else if(code === 'auth/wrong-password'){
+        toast('Current password is incorrect. Please try again.','danger');
+      } else if(code === 'auth/network-request-failed' || /network|offline|timeout/i.test(err?.message||'')){
+        toast('Unable to reach Firebase. Check your internet connection and try again.','warning');
+      } else {
+        toast(err?.message || 'Unable to update email or password. Please try again.','danger');
       }
-      const message = err?.message || 'Unable to update account settings. Please check your password and try again.';
-      toast(message, 'danger');
     }
+  } else if(firebaseAuth){
+    toast('Changing email requires an online Firebase session. Connect to the internet and sign in again.','warning');
   } else {
-    if(currentPassword !== getUserPassword()){
-      toast('Current password is incorrect.', 'danger');
-      return;
-    }
-    if(newEmailValue && newEmailValue !== profile.email){
-      const oldPassword = DB.getScoped(USER_PASSWORD_KEY, profile.email);
-      if(oldPassword){
-        DB.setScoped(USER_PASSWORD_KEY, oldPassword, normalizeAccountId(newEmailValue));
-        DB.deleteScoped(USER_PASSWORD_KEY, profile.email);
-      }
-      saveOwnerProfile(newEmailValue, profile.name, profile.contact, profile.photo, profile.authProvider);
-    }
-    if(newPassword){
-      await setUserPassword(newPassword);
-    }
-    document.getElementById('profile-current-password').value='';
-    document.getElementById('profile-new-password').value='';
-    document.getElementById('profile-confirm-password').value='';
-    renderOwnerProfile();
-    toast('Account settings updated successfully.', 'success');
+    toast('Email changes are only supported with Firebase authentication.','danger');
   }
 }
 
@@ -1723,7 +1720,10 @@ async function doCompletePasswordReset(){
     if(errorEl) errorEl.textContent='Password must be at least 6 characters.';
     return;
   }
-  await setUserPassword(newPassword, email.toLowerCase());
+  const profile=getOwnerProfileData(email.toLowerCase());
+  if(profile.authProvider==='local'){
+    await setUserPassword(newPassword, email.toLowerCase());
+  }
   if(isFirebaseConfigured() && firebaseAuth && firebaseAuth.currentUser && firebaseAuth.currentUser.email.toLowerCase() === email.toLowerCase()){
     try{
       await firebaseAuth.currentUser.updatePassword(newPassword);
@@ -2411,21 +2411,55 @@ function mergeRemoteRecords(localRecords, remoteRecords, pendingIds, markRemoteS
 
 function refreshSyncBadge(){
   const badge=document.getElementById('pending-sync-badge');
+  const netLabel=document.getElementById('net-label');
   if(!badge)return;
-  if(syncInProgress){
-    badge.textContent='Syncing...';
-    badge.className='badge badge-pending';
-    return;
-  }
+  const syncState=DB.getSyncState();
   const queueCount=DB.getSyncQueue().length;
   const pendingSales=DB.getSales().filter(s=>!s.synced).length;
   const pending=queueCount||pendingSales;
+  const online=navigator.onLine;
+
+  if(netLabel){
+    if(!online){
+      netLabel.textContent='Offline (local only)';
+    } else if(syncState.lastStatus==='failed'){
+      netLabel.textContent='Online · Backup issue';
+    } else if(pending){
+      netLabel.textContent='Online · Local changes pending';
+    } else {
+      netLabel.textContent='Online · Backup healthy';
+    }
+  }
+
+  if(syncInProgress){
+    badge.textContent='Syncing...';
+    badge.className='badge badge-pending';
+    badge.title='Backup is in progress.';
+    return;
+  }
+
+  if(!online){
+    badge.textContent=pending ? `${pending} pending offline` : 'Offline - local only';
+    badge.className='badge badge-warning';
+    badge.title=pending ? 'Changes will sync automatically once the internet is restored.' : 'No active internet connection.';
+    return;
+  }
+
+  if(syncState.lastStatus==='failed'){
+    badge.textContent=pending ? `Sync failed · ${pending} pending` : 'Last backup failed';
+    badge.className='badge badge-danger';
+    badge.title=syncState.lastError || 'Last sync attempt failed. Check the logs or retry when online.';
+    return;
+  }
+
   if(pending){
     badge.textContent=`${pending} pending`;
     badge.className='badge badge-pending';
+    badge.title='Local changes are waiting to be backed up.';
   } else {
     badge.textContent='Synced';
     badge.className='badge badge-synced';
+    badge.title='All local changes are backed up to the cloud.';
   }
 }
 
@@ -2630,7 +2664,10 @@ async function doLogin(){
     justLoggedIn=true;
     await firebaseSignIn(email,password);
     setCurrentAccount(email);
-    await setUserPassword(password, email);
+    const profile=getOwnerProfileData(email);
+    if(profile.authProvider==='local'){
+      await setUserPassword(password, email);
+    }
     await saveUserDataToFirestore();
     return;
   }catch(err){
@@ -3446,20 +3483,23 @@ async function ensureCloudAccountForLocalUser(){
   if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()) return false;
   if(getCurrentUser()) return true;
   
+  const primary=getPrimaryAccountEmail();
+  const profile=primary?getOwnerProfileData(primary):getOwnerProfileData();
+
   // Check backoff before attempting auto-login
   if(!shouldRetryAutoLogin()){
     const status = getAutoLoginBackoffStatus();
     if(status && status.maxRetriesReached){
+      if(profile?.email) clearStoredPasswordForAccount(profile.email);
+      toast('Automatic cloud sign-in is paused after repeated failed credential attempts. Please sign in manually or use password reset.','warning');
       console.warn('Auto-login blocked: too many failed attempts. User must manually sign in.');
       return false;
     } else if(status){
+      toast(`Automatic cloud sign-in will retry in ${status.remainingSeconds}s. Sign in manually if you need immediate access.`, 'warning');
       console.warn(`Auto-login backoff active. Retry in ${status.remainingSeconds}s.`);
       return false;
     }
   }
-  
-  const primary=getPrimaryAccountEmail();
-  const profile=primary?getOwnerProfileData(primary):getOwnerProfileData();
   if(!profile.email) return false;
   const password=getUserPassword(profile.email);
   if(!password) return false;
@@ -3490,8 +3530,12 @@ async function ensureCloudAccountForLocalUser(){
           toast('Unable to sync local account to Firebase. See console for details.','warning');
         }
       }
-    } else if(err?.code === 'auth/wrong-password'){
-      toast('Unable to sync offline data to Firebase because stored password is invalid. Please sign in manually once online.','warning');
+    } else if(err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-login-credentials'){
+      clearStoredPasswordForAccount(profile.email);
+      toast('Stored credentials are invalid. Sign in manually once online or use password reset to recover your Firebase account.','warning');
+    } else if(err?.code === 'auth/user-not-found'){
+      clearStoredPasswordForAccount(profile.email);
+      toast('The cloud account was not found. Please sign in manually or register again.','warning');
     } else if(isFirebaseNetworkError(err)){
       toast('Network error while attempting cloud sign-in. Please check your connection.','warning');
     } else {
