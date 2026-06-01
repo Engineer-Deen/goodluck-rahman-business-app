@@ -278,8 +278,8 @@ function getUserPassword(accountEmail){
   return DB.getScoped(USER_PASSWORD_KEY, accountEmail) || '';
 }
 function setUserPassword(password, accountEmail){
-  if(!password) return;
-  DB.setScoped(USER_PASSWORD_KEY, password, accountEmail);
+  // Passwords are no longer stored locally for security reasons.
+  return;
 }
 function clearStoredPasswordForAccount(accountEmail){
   const normalized = normalizeAccountId(accountEmail);
@@ -726,14 +726,8 @@ async function updateEmailPassword(){
       const updatedProfile = saveOwnerProfile(newEmailValue, profile.name, profile.contact, profile.photo, profile.authProvider);
       setCurrentAccount(newEmailValue);
 
-      const oldPassword = DB.getScoped(USER_PASSWORD_KEY, currentEmail);
-      if(oldPassword){
-        DB.setScoped(USER_PASSWORD_KEY, oldPassword, newEmailValue);
-        DB.deleteScoped(USER_PASSWORD_KEY, currentEmail);
-      }
-      if(newPassword){
-        await setUserPassword(newPassword, newEmailValue);
-      }
+      // Credentials are not stored locally for security; existing local password entries are removed.
+      clearStoredPasswordForAccount(currentEmail);
 
       await updateOwnerEmailConfig(newEmailValue);
       await saveUserDataToFirestore();
@@ -1573,8 +1567,10 @@ async function showAppAndInit(nextPanel='dashboard'){
   await new Promise(requestAnimationFrame);
   if(navigator.onLine){
     await firebaseReadyPromise;
-    await ensureCloudAccountForLocalUser();
-    attachRemoteFirestoreListener(getCurrentUser());
+    const currentUser = getCurrentUser();
+    if(currentUser){
+      attachRemoteFirestoreListener(currentUser);
+    }
   }
   initApp();
   if(nextPanel){
@@ -1721,9 +1717,7 @@ async function doCompletePasswordReset(){
     return;
   }
   const profile=getOwnerProfileData(email.toLowerCase());
-  if(profile.authProvider==='local'){
-    await setUserPassword(newPassword, email.toLowerCase());
-  }
+  // Local password persistence is disabled, so do not store the new password locally.
   if(isFirebaseConfigured() && firebaseAuth && firebaseAuth.currentUser && firebaseAuth.currentUser.email.toLowerCase() === email.toLowerCase()){
     try{
       await firebaseAuth.currentUser.updatePassword(newPassword);
@@ -1847,6 +1841,7 @@ const ADMIN_PASSWORD='10737';
 const AUTO_SYNC_INTERVAL_MS=800;
 let syncRetryCountOnline=0;  // Track retry attempts
 let remoteDataUnsubscribe=null;
+let remoteDataPollTimer=null;
 let lastRemoteSnapshotHash='';
 let lastLocalFirestoreWriteAt=0;
 let remoteListenerInitialSnapshot=true;
@@ -1878,9 +1873,10 @@ async function initFirebase(){
     }
   });
   if(navigator.onLine){
-    await ensureCloudAccountForLocalUser();
-    attachRemoteFirestoreListener(getCurrentUser());
-    if(getCurrentUser()){
+    await firebaseReadyPromise;
+    const currentUser = getCurrentUser();
+    if(currentUser){
+      attachRemoteFirestoreListener(currentUser);
       await loadUserDataFromFirestore();
     }
   }
@@ -2039,28 +2035,44 @@ async function saveUserDataToFirestore(){
     const user=getCurrentUser();
     if(!user||!firebaseStore) return;
     const normalized=normalizeAccountId(user.email);
-    const profile=getOwnerProfileData(normalized);
-    const existingPin = DB.getScoped(OWNER_PIN_KEY, normalized);
-    if(existingPin){
-      profile.pin = existingPin;
-    }
-    const existingPassword = DB.getScoped(USER_PASSWORD_KEY, normalized);
-    if(existingPassword){
-      profile.passwordHash = isPasswordHash(existingPassword)
-        ? existingPassword
-        : await hashPasswordForStorage(existingPassword);
-    }
-    const docRef=firebaseStore.collection('users').doc(user.uid);
-    await docRef.set({
-      email:user.email,
-      updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
-      sales:DB.getSales(),
-      inventory:DB.getInventory(),
-      audit:DB.getAudit(),
-      profile,
-      syncQueue:DB.getSyncQueue(),
-      syncState:DB.getSyncState(),
-    },{merge:true});
+
+    // Capture local state
+    const localSales = DB.getSales();
+    const localInventory = DB.getInventory();
+    const localAudit = DB.getAudit();
+    const localProfile = getOwnerProfileData(normalized);
+    const syncQueue = DB.getSyncQueue();
+    const syncState = DB.getSyncState();
+
+    // Use a transaction to merge remote and local arrays safely
+    const docRef = firebaseStore.collection('users').doc(user.uid);
+    await firebaseStore.runTransaction(async (tx)=>{
+      const doc = await tx.get(docRef);
+      const remote = doc.exists ? doc.data() : {};
+
+      const pendingSaleIds = getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+      const pendingInventoryIds = getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+      const pendingAuditIds = getPendingIdsForOpTypes(['append_audit']);
+
+      const mergedSales = mergeRemoteRecords(localSales, remote.sales||[], pendingSaleIds, true);
+      const mergedInventory = mergeRemoteRecords(localInventory, remote.inventory||[], pendingInventoryIds);
+      const mergedAudit = mergeRemoteRecords(localAudit, remote.audit||[], pendingAuditIds);
+
+      // Merge profile: prefer remote values but let local profile fields override if present
+      const mergedProfile = Object.assign({}, remote.profile || {}, localProfile || {});
+
+      tx.set(docRef, {
+        email: user.email,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        sales: mergedSales,
+        inventory: mergedInventory,
+        audit: mergedAudit,
+        profile: mergedProfile,
+        syncQueue: syncQueue,
+        syncState: syncState,
+      }, { merge: true });
+    });
+
     lastLocalFirestoreWriteAt = Date.now();
   }catch(err){
     console.error('saveUserDataToFirestore failed (data remains queued for retry):', err);
@@ -2096,9 +2108,8 @@ async function loadUserDataFromFirestore(){
     if(data.pin){
       setOwnerPin(data.pin, normalized);
     }
-    if(data.profile?.passwordHash){
-      DB.setScoped(USER_PASSWORD_KEY, data.profile.passwordHash, normalized);
-    }
+    // Do NOT persist password hashes locally. Remove any previously stored local password.
+    DB.deleteScoped(USER_PASSWORD_KEY, normalized);
     if(data.syncState){
       DB.setSyncState(data.syncState, normalized);
     }
@@ -2149,6 +2160,10 @@ function detachRemoteFirestoreListener(){
   }
   remoteDataUnsubscribe = null;
   lastRemoteSnapshotHash = '';
+  if(remoteDataPollTimer){
+    clearInterval(remoteDataPollTimer);
+    remoteDataPollTimer = null;
+  }
 }
 
 function attachRemoteFirestoreListener(user){
@@ -2159,27 +2174,81 @@ function attachRemoteFirestoreListener(user){
   try{
     const docRef = firebaseStore.collection('users').doc(user.uid);
     remoteDataUnsubscribe = docRef.onSnapshot({ includeMetadataChanges: true }, async (snapshot)=>{
-      if(!snapshot.exists) return;
-      // Process snapshots even if they include pending local writes. mergeRemoteFirestoreSnapshotData
-      // will avoid clobbering pending local changes by using the sync queue and pending IDs.
-      const data = snapshot.data();
-      if(!data) return;
-      const hash = JSON.stringify({
-        sales:data.sales||[],
-        inventory:data.inventory||[],
-        audit:data.audit||[],
-        profile:data.profile||{},
-        syncState:data.syncState||{},
-      });
-      if(hash === lastRemoteSnapshotHash) return;
-      lastRemoteSnapshotHash = hash;
-      const isInitial = remoteListenerInitialSnapshot;
-      remoteListenerInitialSnapshot = false;
-      const isRecentLocalWrite = Date.now() - lastLocalFirestoreWriteAt < 4000;
-      await mergeRemoteFirestoreSnapshotData(data, isInitial || isRecentLocalWrite, isRecentLocalWrite);
+      try{
+        if(!snapshot.exists) return;
+        // Debug info: help trace why updates may not be applied across devices
+        const meta = snapshot.metadata || {};
+        const sdata = snapshot.data() || {};
+        console.debug('Firestore onSnapshot: exists=', snapshot.exists, 'fromCache=', !!meta.fromCache, 'hasPendingWrites=', !!meta.hasPendingWrites, 'sales=', (sdata.sales||[]).length, 'inventory=', (sdata.inventory||[]).length, 'audit=', (sdata.audit||[]).length);
+
+        // Process snapshots even if they include pending local writes. mergeRemoteFirestoreSnapshotData
+        // will avoid clobbering pending local changes by using the sync queue and pending IDs.
+        const data = sdata;
+        if(!data) return;
+        const hash = JSON.stringify({
+          sales:data.sales||[],
+          inventory:data.inventory||[],
+          audit:data.audit||[],
+          profile:data.profile||{},
+          syncState:data.syncState||{},
+        });
+        if(hash === lastRemoteSnapshotHash) {
+          console.debug('Firestore onSnapshot: hash unchanged, skipping merge');
+          return;
+        }
+        lastRemoteSnapshotHash = hash;
+        const isInitial = remoteListenerInitialSnapshot;
+        remoteListenerInitialSnapshot = false;
+        const isRecentLocalWrite = Date.now() - lastLocalFirestoreWriteAt < 4000;
+        // If snapshot is from cache and there are no pending writes, fetch directly from server to ensure fresh data
+        if(meta.fromCache && !meta.hasPendingWrites){
+          try{
+            const serverDoc = await docRef.get({ source: 'server' });
+            if(serverDoc && serverDoc.exists){
+              const serverData = serverDoc.data();
+              console.debug('Firestore onSnapshot: fetched server copy due to fromCache=true');
+              await mergeRemoteFirestoreSnapshotData(serverData, isInitial || isRecentLocalWrite, isRecentLocalWrite);
+            } else {
+              await mergeRemoteFirestoreSnapshotData(data, isInitial || isRecentLocalWrite, isRecentLocalWrite);
+            }
+          }catch(fetchErr){
+            console.warn('Failed to fetch server copy after fromCache snapshot:', fetchErr);
+            await mergeRemoteFirestoreSnapshotData(data, isInitial || isRecentLocalWrite, isRecentLocalWrite);
+          }
+        } else {
+          await mergeRemoteFirestoreSnapshotData(data, isInitial || isRecentLocalWrite, isRecentLocalWrite);
+        }
+      }catch(err){
+        console.warn('Error processing Firestore onSnapshot:', err);
+      }
     }, (err)=>{
       console.warn('Firestore realtime listener error:', err);
     });
+    // Start periodic server poll to ensure eventual consistency across devices
+    if(remoteDataPollTimer) clearInterval(remoteDataPollTimer);
+    remoteDataPollTimer = setInterval(async ()=>{
+      try{
+        if(!navigator.onLine) return;
+        const serverDoc = await docRef.get({ source: 'server' });
+        if(serverDoc && serverDoc.exists){
+          const serverData = serverDoc.data();
+          const hash = JSON.stringify({
+            sales: serverData.sales||[],
+            inventory: serverData.inventory||[],
+            audit: serverData.audit||[],
+            profile: serverData.profile||{},
+            syncState: serverData.syncState||{},
+          });
+          if(hash !== lastRemoteSnapshotHash){
+            console.debug('Periodic server poll: server snapshot differs, merging');
+            lastRemoteSnapshotHash = hash;
+            await mergeRemoteFirestoreSnapshotData(serverData, false, false);
+          }
+        }
+      }catch(err){
+        // Ignore poll errors
+      }
+    }, 30000);
   }catch(err){
     console.warn('Failed to attach Firestore listener:', err);
   }
@@ -2266,6 +2335,7 @@ async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false, s
       }
     }
     if(changed){
+      console.debug('mergeRemoteFirestoreSnapshotData: applied remote changes, isInitial=', !!isInitialSnapshot, 'suppressNotification=', !!suppressNotification);
       refreshSyncBadge();
       renderDashboard();
       renderSessionTable();
@@ -2273,6 +2343,8 @@ async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false, s
       if(!isInitialSnapshot && !suppressNotification){
         toast('Cloud updates received from another device.','success');
       }
+    } else {
+      console.debug('mergeRemoteFirestoreSnapshotData: no changes detected from remote snapshot');
     }
   }catch(err){
     console.error('mergeRemoteFirestoreSnapshotData failed (local data preserved):', err);
@@ -2390,16 +2462,35 @@ function areRecordsEqual(a,b,ignoreKeys=[]){
 
 function mergeRemoteRecords(localRecords, remoteRecords, pendingIds, markRemoteSynced=false){
   const merged=[];
-  const remoteMap=new Map((remoteRecords||[]).map(item=>[item?.id, item]));
+  const remoteMap=new Map((remoteRecords||[]).filter(item=>item && item.id).map(item=>[item.id,item]));
+  const includedIds=new Set();
+
   for(const record of localRecords||[]){
-    if(record && record.id && pendingIds.has(record.id)){
+    if(!record || !record.id) continue;
+    const remoteRecord = remoteMap.get(record.id);
+    if(pendingIds.has(record.id)){
       merged.push(record);
+      includedIds.add(record.id);
+      if(remoteRecord) remoteMap.delete(record.id);
+      continue;
+    }
+    if(remoteRecord){
+      if(markRemoteSynced && typeof remoteRecord === 'object'){
+        merged.push({ ...remoteRecord, synced: true });
+      } else {
+        merged.push(remoteRecord);
+      }
+      includedIds.add(record.id);
       remoteMap.delete(record.id);
+    } else {
+      merged.push(record);
+      includedIds.add(record.id);
     }
   }
+
   for(const record of remoteRecords||[]){
     if(!record || !record.id) continue;
-    if(pendingIds.has(record.id)) continue;
+    if(includedIds.has(record.id) || pendingIds.has(record.id)) continue;
     if(markRemoteSynced && typeof record === 'object'){
       merged.push({ ...record, synced: true });
     } else {
@@ -2665,9 +2756,7 @@ async function doLogin(){
     await firebaseSignIn(email,password);
     setCurrentAccount(email);
     const profile=getOwnerProfileData(email);
-    if(profile.authProvider==='local'){
-      await setUserPassword(password, email);
-    }
+    // Do not persist user credentials locally; manual sign-in is required for secure cloud access.
     await saveUserDataToFirestore();
     return;
   }catch(err){
@@ -2742,7 +2831,7 @@ function buildSmsMessage(code){
 async function saveLocalRegistration(email, ownerName, contact, password, pin, photo){
   setCurrentAccount(email);
   saveOwnerProfile(email, ownerName, contact, photo, 'local');
-  await setUserPassword(password, email);
+  // Local password storage is disabled for security. Users must sign in through Firebase when online.
   if(pin) setOwnerPin(pin, email);
   DB.setSales([], email);
   DB.setAudit([], email);
@@ -3485,6 +3574,14 @@ async function ensureCloudAccountForLocalUser(){
   
   const primary=getPrimaryAccountEmail();
   const profile=primary?getOwnerProfileData(primary):getOwnerProfileData();
+  if(!profile.email) return false;
+  const password=getUserPassword(profile.email);
+  if(!password){
+    // No locally stored password means auto-login is not available.
+    clearStoredPasswordForAccount(profile.email);
+    clearAutoLoginBackoff();
+    return false;
+  }
 
   // Check backoff before attempting auto-login
   if(!shouldRetryAutoLogin()){
@@ -3500,9 +3597,6 @@ async function ensureCloudAccountForLocalUser(){
       return false;
     }
   }
-  if(!profile.email) return false;
-  const password=getUserPassword(profile.email);
-  if(!password) return false;
   try{
     await firebaseSignIn(profile.email,password);
     attachRemoteFirestoreListener(getCurrentUser());
@@ -3547,9 +3641,10 @@ async function ensureCloudAccountForLocalUser(){
 
 window.addEventListener('online',async ()=>{
   checkNet();
-  await ensureCloudAccountForLocalUser();
-  attachRemoteFirestoreListener(getCurrentUser());
-  if(getCurrentUser()){
+  await firebaseReadyPromise;
+  const currentUser = getCurrentUser();
+  if(currentUser){
+    attachRemoteFirestoreListener(currentUser);
     await loadUserDataFromFirestore();
   }
   const hasPending=DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
@@ -4370,20 +4465,16 @@ async function syncToCloud(silent=false){
     return false;
   }
   await firebaseReadyPromise;
-  await ensureCloudAccountForLocalUser();
   const syncUrl=getSyncUrl();
   const user=getCurrentUser();
   const canSaveFirestore=!!user && !!firebaseStore;
   if(!syncUrl && !canSaveFirestore){
     if(!silent){
-      if(isFirebaseConfigured() && !firebaseAuth){
-        toast('Cloud backup is not ready yet. Waiting for Firebase and retrying automatically.','info');
+      if(isFirebaseConfigured() && !user){
+        toast('Cloud backup is not ready because you are not signed in. Please sign in to Firebase to enable backup.','warning');
       } else {
         toast('Cloud backup is not configured. Please sign in to Firebase or configure backup in Settings.','warning');
       }
-    }
-    if(isFirebaseConfigured() && !firebaseAuth){
-      scheduleOfflineSyncRetry();
     }
     return false;
   }

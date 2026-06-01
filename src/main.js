@@ -317,6 +317,7 @@ function setupAutoUpdater() {
   autoUpdaterInitialized = true;
   const feedUrl = getUpdateFeedUrl();
   try {
+    autoUpdater.useDeltaUpdates = true;
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.autoRunAppAfterInstall = true;
