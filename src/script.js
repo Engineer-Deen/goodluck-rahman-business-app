@@ -1590,8 +1590,8 @@ async function showAppAndInit(nextPanel='dashboard'){
     // If there is pending local data, try to flush it immediately when app starts and we're online
     const hasPending = DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
     if(hasPending){
-      // fire-and-forget; schedule retry on failure
-      syncToCloud(true).catch(()=>{ scheduleOfflineSyncRetry(); });
+      // Try a few quick sync attempts immediately to avoid lingering pending state
+      attemptImmediateSyncOnStart(5).catch(()=>{ scheduleOfflineSyncRetry(); });
     }
   }
   initApp();
@@ -3548,13 +3548,13 @@ function checkNet(){
   refreshSyncBadge();
   return online;
 }
-async function ensureCloudAccountForLocalUser(){
+async function ensureCloudAccountForLocalUser(force=false){
   await firebaseReadyPromise;
   if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()) return false;
   if(getCurrentUser()) return true;
   
-  // Check backoff before attempting auto-login
-  if(!shouldRetryAutoLogin()){
+  // Check backoff before attempting auto-login (can be bypassed by callers when necessary)
+  if(!force && !shouldRetryAutoLogin()){
     const status = getAutoLoginBackoffStatus();
     if(status && status.maxRetriesReached){
       console.warn('Auto-login blocked: too many failed attempts. User must manually sign in.');
@@ -3606,6 +3606,39 @@ async function ensureCloudAccountForLocalUser(){
     }
     return false;
   }
+}
+
+/**
+ * Aggressively attempt to sync pending data shortly after app start.
+ * Makes a small number of quick retries to ensure devices that are online
+ * don't stay stuck with pending queue items.
+ */
+async function attemptImmediateSyncOnStart(attempts=5){
+  try{
+    for(let i=0;i<attempts;i++){
+      const hasPending = DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
+      if(!hasPending) return true;
+      if(!navigator.onLine) return false;
+
+      // Try to ensure cloud auth (force bypass backoff briefly)
+      await ensureCloudAccountForLocalUser(true).catch(()=>{});
+      attachRemoteFirestoreListener(getCurrentUser());
+      // Try loading remote snapshot to merge changes
+      if(getCurrentUser()){
+        await loadUserDataFromFirestore().catch(()=>{});
+      }
+
+      // Try syncing to cloud
+      const ok = await syncToCloud(true).catch(()=>false);
+      if(ok) return true;
+
+      // Wait a short, exponentially increasing delay before next attempt
+      await new Promise(resolve=>setTimeout(resolve, 1000 * Math.pow(2, Math.min(i,4))));
+    }
+  }catch(e){
+    console.warn('attemptImmediateSyncOnStart failed:', e);
+  }
+  return false;
 }
 
 window.addEventListener('online',async ()=>{
