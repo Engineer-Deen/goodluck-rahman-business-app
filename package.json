@@ -24,11 +24,9 @@
     "electron-packager": "^17.1.2"
   },
   "dependencies": {
-    "better-sqlite3": "^12.10.0",
     "dotenv": "^17.4.2",
     "electron-store": "^8.2.0",
-    "electron-updater": "^6.6.2",
-    "uuid": "^9.0.0"
+    "electron-updater": "^6.6.2"
   },
   "build": {
     "appId": "com.goodluck.rahman",
