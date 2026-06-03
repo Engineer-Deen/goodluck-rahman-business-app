@@ -400,6 +400,67 @@ body::before {
   letter-spacing: 0.04em;
 }
 
+/* Session Expired Modal */
+.session-expired-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4,10,18,0.6);
+  z-index: 12000;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.session-expired-modal {
+  width: min(560px, calc(100% - 48px));
+  background: linear-gradient(180deg, rgba(44,65,99,0.98), rgba(30,45,69,0.99));
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 22px 20px;
+  box-shadow: 0 20px 60px rgba(2,8,20,0.6), 0 2px 0 rgba(255,255,255,0.02) inset;
+  color: var(--text-primary);
+  text-align: left;
+  transform: translateY(8px) scale(0.995);
+  opacity: 0;
+  transition: transform 260ms cubic-bezier(.2,.9,.3,1), opacity 220ms ease;
+}
+.session-expired-modal.show {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+.session-expired-header {
+  display:flex; align-items:center; gap:12px; margin-bottom:8px;
+}
+.session-expired-title {
+  font-size:1.1rem; font-weight:700; color:var(--text-primary);
+}
+.session-expired-body { font-size:0.95rem; color:var(--text-secondary); line-height:1.4; margin-bottom:18px; }
+.session-expired-actions { display:flex; justify-content:flex-end; gap:12px; }
+.btn-primary {
+  background: linear-gradient(180deg, var(--gold) 0%, var(--gold-dim) 100%);
+  color: #ffffff;
+  border: none;
+  padding: 10px 16px;
+  font-weight: 700;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(245,200,66,0.16), 0 1px 0 rgba(255,255,255,0.03) inset;
+  transition: transform 120ms ease, box-shadow 180ms ease, filter 150ms ease;
+}
+.btn-primary:focus { outline: 3px solid rgba(245,200,66,0.16); outline-offset: 4px; }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(245,200,66,0.22); filter:brightness(1.03); }
+.btn-primary:active { transform: translateY(0) scale(0.99); }
+
+/* Ensure overlay children cannot be clicked through */
+.session-expired-overlay * { -webkit-user-select: none; user-select: none; }
+
+/* Small screens tighter spacing */
+@media (max-width:420px){
+  .session-expired-modal{ padding:16px; border-radius:10px; }
+  .session-expired-title{ font-size:1rem; }
+}
+
 .login-wholesale-cta-box--static {
   cursor: default;
   margin-top: 0.75rem;
@@ -1051,6 +1112,31 @@ header {
 .sync-status { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-secondary); }
 .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); }
 .sync-dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); }
+
+/* Remote update indicator */
+.remote-update-indicator{
+  display:inline-block;
+  width:12px;height:12px;border-radius:12px;
+  background:transparent;
+  border:2px solid rgba(255,255,255,0.06);
+  margin-left:6px;
+  box-shadow: none;
+  transition: all 0.25s ease;
+}
+.remote-update-indicator.flash{
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(16,185,129,0.9), 0 0 18px rgba(16,185,129,0.5);
+  transform: scale(1.15);
+}
+
+@keyframes remotePulse{
+  0%{ box-shadow: 0 0 0 rgba(16,185,129,0.0); }
+  50%{ box-shadow: 0 0 10px rgba(16,185,129,0.25); }
+  100%{ box-shadow: 0 0 0 rgba(16,185,129,0.0); }
+}
+.remote-update-indicator.animate{
+  animation: remotePulse 1.2s ease-in-out 1;
+}
 
 .btn-header {
   padding: 0.4rem 0.9rem;

@@ -16,6 +16,32 @@
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <title>Good Luck Rahman Enterprise</title>
+<script>
+// Aggressive early hide: Run ASAP to prevent loader from showing too long
+(function(){
+  try{
+    // Add CSS rule to force hide loader if it tries to show
+    if(!document.getElementById('__loader-blocker')){
+      const style = document.createElement('style');
+      style.id = '__loader-blocker';
+      style.textContent = `
+        #app-loader { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }
+        #login-overlay { display: flex; visibility: visible; opacity: 1; pointer-events: auto; }
+      `;
+      document.head.appendChild(style);
+    }
+  }catch(_){}
+  // Immediate hide attempt
+  setTimeout(()=>{
+    try{
+      const l = document.getElementById('app-loader');
+      if(l){ l.style.display='none'; l.style.visibility='hidden'; l.style.opacity='0'; }
+      const o = document.getElementById('login-overlay');
+      if(o){ o.style.display='flex'; o.style.visibility='visible'; o.style.opacity='1'; }
+    }catch(_){}
+  }, 100);
+})();
+</script>
 </head>
 <body>
 
@@ -285,6 +311,7 @@
         <div class="sync-dot" id="net-dot"></div>
         <span id="net-label">Offline</span>
         <span id="pending-sync-badge" class="badge badge-synced">0 pending</span>
+        <span id="remote-update-indicator" class="remote-update-indicator" title="Remote update received" aria-hidden="true"></span>
         <span id="backup-status" class="backup-status"></span>
         <span id="last-synced-at" class="last-synced" aria-live="polite"></span>
       </div>
@@ -300,6 +327,7 @@
     <button class="nav-tab" onclick="showPanel('records')">VIEW RECORDS</button>
     <button class="nav-tab" onclick="showPanel('inventory')">INVENTORY</button>
     <button class="nav-tab" onclick="showPanel('audit')">AUDIT LOG</button>
+    <button class="nav-tab" onclick="showPanel('diagnostics')">DIAGNOSTICS</button>
   </nav>
 
   <main>
@@ -514,6 +542,22 @@
         <div class="card-title" style="color:var(--danger);">Archived Records</div>
         <p style="font-size:.85rem;color:var(--text-secondary);margin-bottom:1rem;">These records were removed from active sales. They cannot be permanently deleted and remain here for full auditability.</p>
         <div id="audit-list"></div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-diagnostics" style="display:none;">
+      <div class="section-header"><div class="section-title">SYSTEM DIAGNOSTICS</div><div class="section-line"></div></div>
+      <div class="card" style="margin-bottom:1rem;">
+        <div class="card-title">Sync and Local Store Status</div>
+        <div id="diagnostics-summary" style="font-size:.95rem;color:var(--text-secondary);"></div>
+      </div>
+      <div class="card" style="margin-bottom:1rem;">
+        <div class="card-title">Pending Sync Queue</div>
+        <div id="diagnostics-queue" style="font-size:.95rem;color:var(--text-secondary);"></div>
+      </div>
+      <div class="card" style="margin-bottom:1rem;">
+        <div class="card-title">Recent Sync Logs</div>
+        <div id="diagnostics-logs" style="font-size:.95rem;color:var(--text-secondary);"></div>
       </div>
     </div>
 
@@ -874,24 +918,27 @@
       ];
 
       window.loadFirebaseCdnScripts = async function loadFirebaseCdnScripts() {
-        if (!navigator.onLine) {
-          console.warn('Offline mode detected: skipping Firebase CDN load.');
-          return;
-        }
-        for (const src of GLR_FIREBASE_SCRIPTS) {
-          await new Promise((resolve) => {
-            const script = document.createElement('script');
-            script.src = src;
-            script.defer = true;
-            script.onload = () => resolve();
-            script.onerror = () => {
-              console.warn('Failed to load Firebase script:', src);
-              resolve();
-            };
-            document.head.appendChild(script);
-          });
-        }
+        console.log('[Firebase] loadFirebaseCdnScripts called, navigator.onLine=', navigator.onLine);
+        // Don't check navigator.onLine here - it's unreliable. The script loader will handle failures.
+        console.log('[Firebase] Loading CDN scripts from:', GLR_FIREBASE_CDN_BASE);
+        const loadScript = (src) => new Promise((resolve) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.onload = () => {
+            console.log('[Firebase] Script loaded successfully:', src);
+            resolve({ src, success: true });
+          };
+          script.onerror = () => {
+            console.warn('[Firebase] Failed to load script:', src);
+            resolve({ src, success: false });
+          };
+          document.head.appendChild(script);
+        });
+        const results = await Promise.all(GLR_FIREBASE_SCRIPTS.map(loadScript));
+        console.log('[Firebase] CDN script load results:', results);
+        console.log('[Firebase] All CDN scripts resolved. window.firebase available:', typeof window.firebase !== 'undefined');
         if (typeof window.initFirebase === 'function') {
+          console.log('[Firebase] Calling initFirebase()...');
           window.initFirebase();
         }
       };

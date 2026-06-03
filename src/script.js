@@ -1,6 +1,4 @@
-﻿function electronAvailable(){
-  return (typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.storeGetSync === 'function');
-}
+const electronAvailable = typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.storeGetSync === 'function';
 const CURRENT_ACCOUNT_KEY='glr_current_account';
 /** Persists last business account email so recovery flows work after logout (scoped data keys use email). */
 const LAST_PROFILE_EMAIL_KEY='glr_last_profile_email';
@@ -28,20 +26,20 @@ function getScopedStorageKey(key, accountEmail){
 const DB={
   get(k){
     try {
-      if (electronAvailable()) return window.electronAPI.storeGetSync(k);
+      if (electronAvailable) return window.electronAPI.storeGetSync(k);
       const v=localStorage.getItem(k);
       return v?JSON.parse(v):null;
     } catch(e){return null;}
   },
   set(k,v){
     try {
-      if (electronAvailable()) return window.electronAPI.storeSetSync(k,v);
+      if (electronAvailable) return window.electronAPI.storeSetSync(k,v);
       localStorage.setItem(k,JSON.stringify(v));
     } catch(e){}
   },
   delete(k){
     try {
-      if (electronAvailable()) return window.electronAPI.storeDeleteSync(k);
+      if (electronAvailable) return window.electronAPI.storeDeleteSync(k);
       localStorage.removeItem(k);
     } catch(e){}
   },
@@ -90,9 +88,9 @@ const FIREBASE_CONFIG={
 /**
  * Wholesales email verification: register users in WHOLESALE_REGISTERED_USERS and/or Firestore meta/appConfig.wholesaleAllowedUsers.
  * Each entry needs phone (E.164) and email.
- * Email delivery (free, no payment): EmailJS (https://www.emailjs.com — 200 emails/month, no card) or
+ * Email delivery (free, no payment): EmailJS (https://www.emailjs.com � 200 emails/month, no card) or
  * Firebase Extension "Trigger Email" (Firestore `mail` collection + Gmail SMTP). Dev toast if neither is set.
- * Optional Firestore: meta/appConfig.wholesaleEmailDelivery — same shape as WHOLESALE_EMAIL_DELIVERY below.
+ * Optional Firestore: meta/appConfig.wholesaleEmailDelivery � same shape as WHOLESALE_EMAIL_DELIVERY below.
  */
 const OWNER_EMAIL=''; // Optional: lock login to one owner email if set.
 const FIRESTORE_CONFIG_COLLECTION='meta';
@@ -103,10 +101,10 @@ const USER_PASSWORD_KEY='glr_user_password';
 const WHOLESALE_ACCESS_KEY='glr_wholesale_email_access';
 /**
  * Developer-registered wholesales users (phone + email + access configuration code).
- * Optional Firestore: meta/appConfig field `wholesaleAllowedUsers` — array of { phone, email }.
+ * Optional Firestore: meta/appConfig field `wholesaleAllowedUsers` � array of { phone, email }.
  */
 /**
- * Built-in fallback (works offline). Also add users in Profile → Wholesales authorized users.
+ * Built-in fallback (works offline). Also add users in Profile ? Wholesales authorized users.
  * Phone must be E.164 e.g. +23274132162
  */
 const WHOLESALE_REGISTERED_USERS=[
@@ -121,11 +119,11 @@ const MSG_WHOLESALE_NOT_REGISTERED='This phone number or email address is not re
  * Email delivery for wholesales OTP (all free tiers, no credit card).
  * mode: 'auto' | 'emailjs' | 'firebase' | 'dev'
  *
- * EmailJS (easiest): https://www.emailjs.com → sign up → Email Services (Gmail) → Email Templates.
+ * EmailJS (easiest): https://www.emailjs.com ? sign up ? Email Services (Gmail) ? Email Templates.
  * Template To field: {{email}} (or {{to_email}}). Subject: {{subject}}. Body: {{passcode}} and/or {{message}}.
- * Account → API keys → Public Key. Paste publicKey, serviceId, templateId below (or in Firestore wholesaleEmailDelivery).
+ * Account ? API keys ? Public Key. Paste publicKey, serviceId, templateId below (or in Firestore wholesaleEmailDelivery).
  *
- * Firebase: Console → Extensions → "Trigger Email" → SMTP (Gmail app password works). Collection name: mail.
+ * Firebase: Console ? Extensions ? "Trigger Email" ? SMTP (Gmail app password works). Collection name: mail.
  */
 const WHOLESALE_EMAIL_DELIVERY={
   mode:'auto',
@@ -159,7 +157,7 @@ const WHOLESALE_OTP_TTL_MS=10*60*1000;
 const WHOLESALE_OTP_RESEND_MS=60*1000;
 /** Country prefix for the wholesale phone field when users enter local digits only (Sierra Leone). */
 const WHOLESALE_DEFAULT_DIAL_CODE='+232';
-const MSG_WHOLESALE_NOT_ACTIVATED='No wholesales users are set up yet. Log in to the main app → Profile → Wholesales authorized users → add phone and email.';
+const MSG_WHOLESALE_NOT_ACTIVATED='No wholesales users are set up yet. Log in to the main app ? Profile ? Wholesales authorized users ? add phone and email.';
 const MSG_WHOLESALE_UNAUTHORIZED='You are not authorized to use this service. If you need access, please contact your administrator.';
 /** Try these bundled names if login-photo.png is missing (same folder: src/assets/). */
 const BUNDLED_OWNER_PHOTO_CANDIDATES=[
@@ -175,64 +173,13 @@ const EXPLICIT_LOGOUT_KEY='glr_explicit_logout';
 const OWNER_PROFILE_KEY='glr_owner_profile';
 const ACCOUNT_INDEX_KEY='glr_account_index';
 const SYNC_URL_KEY='glr_sync_url';
-const AUTO_LOGIN_BACKOFF_KEY='glr_auto_login_backoff';
 const UPDATE_URL_HELP='Use only for a custom generic feed URL; GitHub Releases works automatically when the app is built with GitHub publish config.';
-
-// Auto-login backoff tracking to prevent Firebase rate limiting
-function getAutoLoginBackoff(){
-  const data = DB.get(AUTO_LOGIN_BACKOFF_KEY);
-  if(!data || typeof data !== 'object') return { failCount: 0, lastFailedAt: 0 };
-  return data;
-}
-
-function recordAutoLoginFailure(){
-  const backoff = getAutoLoginBackoff();
-  backoff.failCount = (backoff.failCount || 0) + 1;
-  backoff.lastFailedAt = Date.now();
-  DB.set(AUTO_LOGIN_BACKOFF_KEY, backoff);
-}
-
-function clearAutoLoginBackoff(){
-  DB.delete(AUTO_LOGIN_BACKOFF_KEY);
-}
-
-function shouldRetryAutoLogin(){
-  const backoff = getAutoLoginBackoff();
-  const failCount = backoff.failCount || 0;
-  if(failCount === 0) return true;
-  
-  // Exponential backoff: 5s, 30s, 5min, 15min, 30min
-  const delays = [5000, 30000, 300000, 900000, 1800000];
-  const delayIndex = Math.min(failCount - 1, delays.length - 1);
-  const requiredDelay = delays[delayIndex];
-  const timeSinceLastFailure = Date.now() - (backoff.lastFailedAt || 0);
-  
-  return timeSinceLastFailure >= requiredDelay;
-}
-
-function getAutoLoginBackoffStatus(){
-  const backoff = getAutoLoginBackoff();
-  const failCount = backoff.failCount || 0;
-  if(failCount === 0) return null;
-  
-  const delays = [5000, 30000, 300000, 900000, 1800000];
-  const delayIndex = Math.min(failCount - 1, delays.length - 1);
-  const requiredDelay = delays[delayIndex];
-  const timeSinceLastFailure = Date.now() - (backoff.lastFailedAt || 0);
-  const remainingMs = Math.max(0, requiredDelay - timeSinceLastFailure);
-  
-  return {
-    failCount,
-    remainingSeconds: Math.ceil(remainingMs / 1000),
-    maxRetriesReached: failCount >= 5
-  };
-}
-
 let syncDebounceTimer=null;
 let syncInProgress=false;
+let sessionRecoveryRequired=false; // When true, pauses all sync and forces re-auth
 let syncIntervalTimer=null;
 let offlineSyncRetryTimer=null;  // Retry timer for when connection restores
-let syncRetryCountOnline=0; // count consecutive online retry failures
+let logFlushTimer = null;
 let justLoggedIn=false;
 let lastNetworkOnline=null;
 let pendingRegistrationPhoto=null;
@@ -644,23 +591,36 @@ function handleRegistrationPhotoSelected(event){
 function selectProfilePhoto(){
   document.getElementById('profile-photo-input')?.click();
 }
+
+function queueOwnerPhotoUpdate(imageData, syncImmediately=true){
+  const profile = getOwnerProfileData();
+  const accountEmail = getCurrentAccount() || getPrimaryAccountEmail() || profile.email || '';
+  const normalizedEmail = normalizeAccountId(accountEmail);
+  const profileEmail = normalizedEmail || profile.email || '';
+  const updatedProfile = saveOwnerProfile(profileEmail, profile.name, profile.contact, imageData, profile.authProvider || 'local');
+  if(!normalizedEmail){
+    DB.set('owner_photo', imageData);
+  }
+  queueSync('update_owner_photo', {
+    type: 'owner_photo',
+    imageData,
+    uploadedAt: new Date().toISOString(),
+  });
+  if(syncImmediately && navigator.onLine){
+    syncToCloud(true).catch(()=>{});
+  }
+  refreshSyncBadge();
+  return updatedProfile;
+}
+
 function handleProfilePhotoSelected(event){
   const file=event.target.files?.[0];
   if(!file) return;
   const reader=new FileReader();
   reader.onload=function(e){
     const photoData=e.target.result;
-    const profile=getOwnerProfileData();
-    saveOwnerProfile(profile.email, profile.name, profile.contact, photoData, profile.authProvider);
+    queueOwnerPhotoUpdate(photoData);
     renderOwnerProfile();
-    queueSync('update_owner_photo', {
-      type: 'owner_photo',
-      photo: photoData,
-      uploadedAt: new Date().toISOString(),
-    });
-    if(navigator.onLine){
-      syncToCloud(true).catch(()=>{});
-    }
     toast('Profile photo updated.','success');
   };
   reader.readAsDataURL(file);
@@ -1010,7 +970,7 @@ async function loadWholesaleAdminUsers(){
   const countEl=document.getElementById('admin-wholesale-user-count');
   if(countEl) countEl.textContent = wholesaleAdminUsersCache.length;
   if(!firebaseStore){
-    setWholesaleAdminStatus('Cloud database offline — users added here will not sync until Firebase is available.',true);
+    setWholesaleAdminStatus('Cloud database offline � users added here will not sync until Firebase is available.',true);
   }else{
     setWholesaleAdminStatus(`${wholesaleAdminUsersCache.length} authorized user(s) loaded.`,false);
   }
@@ -1189,7 +1149,7 @@ function getWholesaleOtpEmailContent(code){
   const expiresAt=Date.now()+WHOLESALE_OTP_TTL_MS;
   const expiryLabel=formatWholesaleOtpExpiryTime(expiresAt);
   return {
-    subject:`${brand} — Wholesales login code`,
+    subject:`${brand} � Wholesales login code`,
     text:`Your Wholesales login code is ${code}. It expires at ${expiryLabel}. If you did not request this, ignore this email.`,
     html:buildWholesaleVerificationEmailHtml(code),
     expiresAt,
@@ -1271,7 +1231,7 @@ function getPasswordResetEmailContent(code){
   const expiryLabel=formatWholesaleOtpExpiryTime(expiresAt);
   const safeCode=String(code).replace(/[^\d]/g,'');
   return {
-    subject:`${brand} — Password reset code`,
+    subject:`${brand} � Password reset code`,
     text:`Your ${brand} password reset code is ${safeCode}. It expires at ${expiryLabel}. If you did not request this, ignore this email.`,
     html:`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:0;background:#f7f8fb;font-family:Segoe UI,Arial,sans-serif;color:#333;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;padding:24px;">
 <tr><td style="background:#ffffff;border-radius:16px;border:1px solid rgba(0,0,0,0.06);padding:28px;">
@@ -1362,7 +1322,7 @@ async function beginWholesaleEmailVerification(){
   void refreshWholesaleRegisteredUsers({ network:navigator.onLine!==false });
   if(!hasWholesaleRegistryConfigured()){
     if(errEl) errEl.textContent=MSG_WHOLESALE_NOT_ACTIVATED;
-    console.warn('Wholesale registry: add users in Profile → Wholesales authorized users.');
+    console.warn('Wholesale registry: add users in Profile ? Wholesales authorized users.');
     return;
   }
   const { phone, email }=getWholesaleLoginCredentials();
@@ -1387,7 +1347,7 @@ async function beginWholesaleEmailVerification(){
   wholesaleEmailSendInFlight=true;
   if(sendBtn){
     sendBtn.disabled=true;
-    sendBtn.textContent='Sending…';
+    sendBtn.textContent='Sending�';
   }
   try{
     const code=generateWholesaleOtpCode();
@@ -1405,12 +1365,12 @@ async function beginWholesaleEmailVerification(){
     const sentMsg=provider==='dev'
       ? (navigator.onLine===false
         ? 'Offline: your code is in the yellow toast above.'
-        : 'Email could not be sent — your code is in the yellow toast above.')
+        : 'Email could not be sent � your code is in the yellow toast above.')
       : 'Verification code sent to your registered email.';
     toast(sentMsg,provider==='dev'?'warning':'success');
   }catch(err){
     console.error(err);
-    if(errEl) errEl.textContent='We could not send the email. Set up free EmailJS (emailjs.com) or Firebase Trigger Email — see WHOLESALE_EMAIL_DELIVERY in script.js.';
+    if(errEl) errEl.textContent='We could not send the email. Set up free EmailJS (emailjs.com) or Firebase Trigger Email � see WHOLESALE_EMAIL_DELIVERY in script.js.';
   }finally{
     wholesaleEmailSendInFlight=false;
     if(sendBtn){
@@ -1451,7 +1411,7 @@ async function completeWholesaleEmailVerification(){
   }
   if(verifyBtn){
     verifyBtn.disabled=true;
-    verifyBtn.textContent='Logging in…';
+    verifyBtn.textContent='Logging in�';
   }
   try{
     DB.set(WHOLESALE_ACCESS_KEY,{ phone, email, verifiedAt:new Date().toISOString() });
@@ -1527,9 +1487,9 @@ function resetAuthButtons(){
   const loginButton=document.getElementById('login-submit-btn');
   const registerButton=document.getElementById('register-submit-btn');
   const adminLoginButton=document.getElementById('admin-login-submit-btn');
-  if(loginButton){ loginButton.disabled=false; loginButton.textContent='🔓 LOGIN'; }
-  if(registerButton){ registerButton.disabled=false; registerButton.textContent='📝 CREATE ACCOUNT'; }
-  if(adminLoginButton){ adminLoginButton.disabled=false; adminLoginButton.textContent='🔒 ADMIN LOGIN'; }
+  if(loginButton){ loginButton.disabled=false; loginButton.textContent='?? LOGIN'; }
+  if(registerButton){ registerButton.disabled=false; registerButton.textContent='?? CREATE ACCOUNT'; }
+  if(adminLoginButton){ adminLoginButton.disabled=false; adminLoginButton.textContent='?? ADMIN LOGIN'; }
 }
 function initLoginScreen(){
   resetAuthButtons();
@@ -1553,12 +1513,12 @@ function initLoginScreen(){
   // Also listen for online/offline events for instant feedback
   window.addEventListener('online', () => {
     updateConnectionStatusUI(true);
-    toast('✅ Internet connection restored', 'success');
+    toast('? Internet connection restored', 'success');
   });
   
   window.addEventListener('offline', () => {
     updateConnectionStatusUI(false);
-    toast('❌ Internet connection lost', 'warning');
+    toast('? Internet connection lost', 'warning');
   });
   
   if(shouldUsePinMode()){
@@ -1570,29 +1530,15 @@ function initLoginScreen(){
 async function showAppAndInit(nextPanel='dashboard'){
   // Clean up connection status bar before showing main app
   const statusBar = document.getElementById('connection-status-bar');
-  if(statusBar) {
-    statusBar.remove();
-  }
-
-  const loginOverlay = document.getElementById('login-overlay');
-  if(loginOverlay) {
-    loginOverlay.style.display = 'none';
-  }
-  const appRoot = document.getElementById('app');
-  if(appRoot) {
-    appRoot.style.display = 'flex';
-  }
+  if(statusBar) statusBar.remove();
+  
+  document.getElementById('login-overlay').style.display='none';
+  document.getElementById('app').style.display='flex';
   await new Promise(requestAnimationFrame);
   if(navigator.onLine){
     await firebaseReadyPromise;
     await ensureCloudAccountForLocalUser();
     attachRemoteFirestoreListener(getCurrentUser());
-    // If there is pending local data, try to flush it immediately when app starts and we're online
-    const hasPending = DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
-    if(hasPending){
-      // Try a few quick sync attempts immediately to avoid lingering pending state
-      attemptImmediateSyncOnStart(5).catch(()=>{ scheduleOfflineSyncRetry(); });
-    }
   }
   initApp();
   if(nextPanel){
@@ -1738,10 +1684,7 @@ async function doCompletePasswordReset(){
     if(errorEl) errorEl.textContent='Password must be at least 6 characters.';
     return;
   }
-  const profile=getOwnerProfileData(email.toLowerCase());
-  if(profile.authProvider==='local'){
-    await setUserPassword(newPassword, email.toLowerCase());
-  }
+  await setUserPassword(newPassword, email.toLowerCase());
   if(isFirebaseConfigured() && firebaseAuth && firebaseAuth.currentUser && firebaseAuth.currentUser.email.toLowerCase() === email.toLowerCase()){
     try{
       await firebaseAuth.currentUser.updatePassword(newPassword);
@@ -1835,34 +1778,11 @@ let authUser=null;
 let ownerEmailConfig=null;
 let adminLoginVerified=false;
 let adminSecretClickCount=0;
-let loginCooldownExpiresAt=0;
-let loginCooldownTimer=null;
-
-function startLoginCooldown(seconds){
-  const errorEl = document.getElementById('login-error');
-  const loginButton = document.getElementById('login-submit-btn');
-  loginCooldownExpiresAt = Date.now() + seconds * 1000;
-  if(loginCooldownTimer) clearInterval(loginCooldownTimer);
-  loginCooldownTimer = setInterval(() => {
-    const remainingMs = loginCooldownExpiresAt - Date.now();
-    if(remainingMs <= 0){
-      clearInterval(loginCooldownTimer);
-      loginCooldownTimer = null;
-      loginCooldownExpiresAt = 0;
-      if(errorEl) errorEl.textContent = '';
-      if(loginButton) loginButton.disabled = false;
-      return;
-    }
-    const remainingSeconds = Math.ceil(remainingMs / 1000);
-    if(errorEl){
-      errorEl.textContent = `Too many login attempts detected. Please wait ${remainingSeconds} second${remainingSeconds === 1 ? '' : 's'} before trying again.`;
-    }
-  }, 1000);
-}
 let adminSecretTimer=null;
 const ADMIN_EMAIL='abduldeenkamara06@gmail.com';
 const ADMIN_PASSWORD='10737';
 const AUTO_SYNC_INTERVAL_MS=800;
+let syncRetryCountOnline=0;  // Track retry attempts
 let remoteDataUnsubscribe=null;
 let lastRemoteSnapshotHash='';
 let lastLocalFirestoreWriteAt=0;
@@ -1881,7 +1801,7 @@ async function initFirebase(){
   firebaseStore=firebase.firestore();
   firebaseStorage=firebase.storage();
   if(firebaseStore && typeof firebaseStore.enablePersistence === 'function'){
-    firebaseStore.enablePersistence().catch((err)=>{
+    firebaseStore.enablePersistence({ synchronizeTabs:true }).catch((err)=>{
       console.warn('Firestore persistence not enabled:', err);
     });
   }
@@ -1892,8 +1812,15 @@ async function initFirebase(){
     authUser=user;
     if(user){
       await handleUserSignedIn(user);
+    } else {
+      // If auth state disappeared unexpectedly (not an explicit logout), require recovery
+      if(getCurrentAccount() && !isExplicitLogout()){
+        handleAuthFailure(new Error('Authentication state lost'));
+      }
     }
   });
+  // Validate stored session at startup
+  void startupAuthValidation();
   if(navigator.onLine){
     await ensureCloudAccountForLocalUser();
     attachRemoteFirestoreListener(getCurrentUser());
@@ -1938,6 +1865,294 @@ function updateAuthActions(){
   if(ownerNote){
     ownerNote.textContent = 'Enter your email and password to continue.';
   }
+}
+
+function isAuthError(err){
+  if(!err) return false;
+  // Prefer explicit Firebase error codes when available
+  const code = String(err.code || '').toLowerCase();
+  const msg = String(err.message || err.toString() || '').toLowerCase();
+  // Known Firebase auth error codes
+  const authCodes = [
+    'auth/invalid-user-token',
+    'auth/user-token-expired',
+    'auth/id-token-expired',
+    'auth/session-cookie-expired',
+    'auth/argument-error',
+    'auth/internal-error',
+    'auth/too-many-requests',
+    'auth/network-request-failed',
+    'auth/requires-recent-login',
+    'auth/user-disabled',
+    'auth/user-not-found',
+    'permission-denied'
+  ];
+  if(code && authCodes.some(c=>code.indexOf(c)!==-1 || code===c)) return true;
+  // Fallback: check message keywords
+  if(msg.includes('auto-login') || msg.includes('auto login') || msg.includes('too many failed') || msg.includes('expired') || msg.includes('invalid token') || msg.includes('invalid auth') || msg.includes('permission denied')) return true;
+  // Also treat generic 'auth' or 'unauth' tokens as auth issues
+  if(code.startsWith('auth/') || msg.includes('auth') || msg.includes('unauth')) return true;
+  return false;
+}
+
+function showSessionExpiredModal(){
+  try{
+    if(document.getElementById('session-expired-modal')) return;
+    // Create overlay
+    const overlay=document.createElement('div');
+    overlay.id='session-expired-modal';
+    overlay.className='session-expired-overlay';
+    overlay.setAttribute('role','presentation');
+
+    // Modal container
+    const modal=document.createElement('div');
+    modal.className='session-expired-modal';
+    modal.setAttribute('role','alertdialog');
+    modal.setAttribute('aria-modal','true');
+    modal.setAttribute('aria-labelledby','session-expired-title');
+    modal.setAttribute('aria-describedby','session-expired-desc');
+
+    const header=document.createElement('div'); header.className='session-expired-header';
+    const title=document.createElement('div'); title.className='session-expired-title'; title.id='session-expired-title';
+    title.textContent='Session Expired';
+    header.appendChild(title);
+
+    const body=document.createElement('div'); body.className='session-expired-body'; body.id='session-expired-desc';
+    body.textContent = 'Your authentication session is no longer valid.\n\nTo continue using the system and resume synchronization, please sign in again.';
+
+    const actions=document.createElement('div'); actions.className='session-expired-actions';
+    const okBtn=document.createElement('button');
+    okBtn.className='btn-primary';
+    okBtn.type='button';
+    okBtn.textContent='OK';
+    okBtn.setAttribute('aria-label','Acknowledge session expired and sign in');
+    okBtn.addEventListener('click', async (e)=>{
+      e.preventDefault();
+      try{ await enforceSignOutAndRedirect(); }catch(_e){}
+    });
+
+    actions.appendChild(okBtn);
+
+    modal.appendChild(header);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+
+    // Prevent clicks on overlay from closing modal and stop propagation
+    overlay.addEventListener('click',(e)=>{ e.stopPropagation(); });
+
+    // Focus management & keyboard intercept
+    const keyHandler=(e)=>{
+      // Prevent ESC from closing
+      if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); }
+      // Trap focus inside modal
+      if(e.key === 'Tab'){
+        const focusables = modal.querySelectorAll('button,a,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])');
+        if(!focusables.length) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length-1];
+        if(e.shiftKey){ if(document.activeElement === first){ e.preventDefault(); last.focus(); } }
+        else { if(document.activeElement === last){ e.preventDefault(); first.focus(); } }
+      }
+    };
+    overlay._keyHandler = keyHandler;
+    window.addEventListener('keydown', keyHandler, true);
+
+    document.body.appendChild(overlay);
+    // trigger CSS animation
+    requestAnimationFrame(()=> modal.classList.add('show'));
+    // move focus to OK button
+    setTimeout(()=>{ okBtn.focus(); }, 120);
+  }catch(e){ console.warn('Failed to show session modal', e); }
+}
+
+function removeSessionExpiredModal(){
+  const overlay=document.getElementById('session-expired-modal');
+  if(!overlay) return;
+  try{
+    if(overlay._keyHandler) window.removeEventListener('keydown', overlay._keyHandler, true);
+    const modal = overlay.querySelector('.session-expired-modal');
+    if(modal){ modal.classList.remove('show'); }
+    // let animation play then remove
+    setTimeout(()=>{ try{ overlay.remove(); }catch(_e){} }, 200);
+  }catch(e){ try{ overlay.remove(); }catch(_e){} }
+}
+
+// Production logger: stores events locally and optionally posts to a remote endpoint.
+function prodLogEvent(eventName, payload){
+  try{
+    const logsKey='glr_event_logs';
+    const queueKey='glr_event_logs_queue';
+    const logs = DB.get(logsKey) || [];
+    const entry = { id:'L-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6), ts: new Date().toISOString(), event: eventName, payload };
+    logs.push(entry);
+    // keep last 1000 entries
+    if(logs.length>1000) logs.splice(0, logs.length-1000);
+    DB.set(logsKey, logs);
+    // console for immediate visibility
+    console.log('[EVENT]', eventName, payload);
+
+    // enqueue for remote posting
+    try{
+      const q = DB.get(queueKey) || [];
+      q.push({ ...entry, attempts:0, nextAttemptAt: Date.now() });
+      DB.set(queueKey, q);
+      scheduleLogFlush();
+      if(navigator.onLine) flushEventLogs().catch(()=>{});
+    }catch(_e){ /* non-fatal */ }
+  }catch(e){ console.warn('prodLogEvent failed', e); }
+}
+
+function getRemoteLogUrl(){
+  return (window.GLr && window.GLr.LOG_SERVER_URL) || (DB.get('glr_log_server_url')||'').trim();
+}
+
+async function flushEventLogs(){
+  const remote = getRemoteLogUrl();
+  if(!remote || !navigator.onLine) return;
+  const queueKey='glr_event_logs_queue';
+  const q = DB.get(queueKey) || [];
+  if(!Array.isArray(q) || q.length===0) return;
+  const now = Date.now();
+  // pick up to 10 entries that are due
+  const due = q.filter(item=> (item.nextAttemptAt||0) <= now).slice(0,10);
+  if(due.length===0) return;
+  for(const item of due){
+    try{
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(()=>controller.abort(), 10000) : null;
+      const res = await fetch(remote, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(item), signal:controller?.signal });
+      if(timeoutId) clearTimeout(timeoutId);
+      if(res && res.ok){
+        // remove from queue
+        const cur = DB.get(queueKey) || [];
+        const remaining = cur.filter(x=>x.id !== item.id);
+        DB.set(queueKey, remaining);
+        // mark sent time in logs (optional)
+        const logsKey='glr_event_logs';
+        const logs = DB.get(logsKey) || [];
+        const l = logs.find(lo=>lo.id===item.id);
+        if(l) l.sentAt = new Date().toISOString();
+        DB.set(logsKey, logs);
+        prodLogEvent('__internal_log_sent', { id: item.id });
+      } else {
+        throw new Error('HTTP '+(res?res.status:'unknown'));
+      }
+    }catch(e){
+      // update attempt count and schedule next attempt with exponential backoff
+      const cur = DB.get(queueKey) || [];
+      const idx = cur.findIndex(x=>x.id===item.id);
+      if(idx===-1) continue;
+      const attempts = (cur[idx].attempts||0) + 1;
+      const backoff = Math.min(60*1000 * Math.pow(2, attempts), 24*60*60*1000); // cap 24h
+      cur[idx].attempts = attempts;
+      cur[idx].nextAttemptAt = Date.now() + backoff;
+      DB.set(queueKey, cur);
+    }
+    // small delay between posts
+    await new Promise(r=>setTimeout(r, 120));
+  }
+}
+
+function scheduleLogFlush(){
+  if(logFlushTimer) return;
+  logFlushTimer = setInterval(()=>{
+    if(!navigator.onLine) return;
+    flushEventLogs().catch(()=>{});
+  }, 10000);
+}
+
+function stopLogFlush(){
+  if(logFlushTimer){ clearInterval(logFlushTimer); logFlushTimer=null; }
+}
+
+function handleAuthFailure(err){
+  console.error('Authentication failure detected', err);
+  console.log('Authentication failure detected');
+  sessionRecoveryRequired=true;
+  prodLogEvent('auth_failure_detected', { error: String(err?.code||err?.message||err) });
+  showSessionExpiredModal();
+}
+
+async function enforceSignOutAndRedirect(){
+  try{
+    console.log('Session invalidated');
+    prodLogEvent('session_invalidated', { reason: 'user_ok_or_auto' });
+    // Pause sync
+    sessionRecoveryRequired=true;
+    syncInProgress=false;
+    if(syncDebounceTimer) { clearTimeout(syncDebounceTimer); syncDebounceTimer=null; }
+    stopOfflineSyncRetry();
+    if(syncIntervalTimer){ clearInterval(syncIntervalTimer); syncIntervalTimer=null; }
+    // detach listeners
+    try{ detachRemoteFirestoreListener(); }catch(_e){}
+    // sign out from firebase
+    try{ await firebaseSignOut(); }catch(_e){ console.warn('Firebase signOut error',_e); }
+    // clear cached local password to force full login
+    const normalized = normalizeAccountId(getCurrentUser()?.email || getCurrentAccount());
+    if(normalized){ DB.deleteScoped(USER_PASSWORD_KEY, normalized); }
+    setExplicitLogout(true);
+    // Clear any auth-related local flags
+    try{ DB.delete('glr_auth_token'); }catch(_e){}
+    // Remove modal
+    removeSessionExpiredModal();
+    prodLogEvent('user_logged_out_automatic', { account: getCurrentAccount() });
+    console.log('User logged out automatically');
+    // Redirect to login overlay (skip PIN)
+    const overlay=document.getElementById('login-overlay');
+    if(overlay) overlay.style.display='flex';
+    setLoginMode('login');
+    // Hide main app
+    const appEl=document.getElementById('app'); if(appEl) appEl.style.display='none';
+    prodLogEvent('redirected_to_login', { account: getCurrentAccount() });
+    console.log('Redirected to Login Page');
+  }catch(e){ console.error('Error during enforced sign out', e); }
+}
+
+function clearSessionRecovery(){
+  sessionRecoveryRequired=false;
+  removeSessionExpiredModal();
+  // resume auto sync loop
+  startAutoSyncLoop();
+}
+
+// Expose a demo helper to simulate auth failures for testing
+function simulateAuthFailure(code, message){
+  const err = new Error(message || 'Simulated auth failure');
+  if(code) err.code = code;
+  handleAuthFailure(err);
+}
+window.simulateAuthFailure = simulateAuthFailure;
+window.prodLogEvent = prodLogEvent;
+
+async function startupAuthValidation(){
+  try{
+    if(!firebaseAuth) return;
+    const user = firebaseAuth.currentUser;
+    if(!user){
+      // If local account data exists but no firebase user, force login
+      if(getCurrentAccount()){
+        handleAuthFailure(new Error('No authenticated user at startup'));
+      }
+      return;
+    }
+    // If online, try to refresh token to validate session
+    if(navigator.onLine){
+      try{
+        await user.getIdToken(true);
+        // token ok
+      }catch(e){
+        if(isAuthError(e)) handleAuthFailure(e);
+      }
+    } else {
+      // offline: try to get cached token; if that fails, require re-auth
+      try{
+        await user.getIdToken();
+      }catch(e){
+        handleAuthFailure(e);
+      }
+    }
+  }catch(e){ console.warn('startupAuthValidation failed', e); }
 }
 
 async function getOwnerEmailConfig(){
@@ -1997,6 +2212,8 @@ function getCurrentUser(){
 }
 
 async function handleUserSignedIn(user){
+  // Clear any session-recovery state when a valid user signs in
+  try{ clearSessionRecovery(); }catch(_e){}
   
   const runFirestoreRestore=async()=>{
     try{
@@ -2013,6 +2230,7 @@ async function handleUserSignedIn(user){
     }
   };
   try{
+    console.log('Authentication restored after login');
     const normalized=user?.email?.toLowerCase().trim();
     if(normalized){
       const profile=getOwnerProfileData(normalized);
@@ -2052,130 +2270,88 @@ async function handleUserSignedIn(user){
 }
 
 async function saveUserDataToFirestore(){
-  try{
-    const user=getCurrentUser();
-    if(!user||!firebaseStore) return;
-    const normalized=normalizeAccountId(user.email);
-    const localProfile=getOwnerProfileData(normalized) || {};
-    const existingPin = DB.getScoped(OWNER_PIN_KEY, normalized);
-    if(existingPin){
-      localProfile.pin = existingPin;
-    }
-    const existingPassword = DB.getScoped(USER_PASSWORD_KEY, normalized);
-    if(existingPassword){
-      localProfile.passwordHash = isPasswordHash(existingPassword)
-        ? existingPassword
-        : await hashPasswordForStorage(existingPassword);
-    }
-    const docRef=firebaseStore.collection('users').doc(user.uid);
-    await firebaseStore.runTransaction(async (tx)=>{
-      const serverDoc = await tx.get(docRef);
-      const serverData = serverDoc.exists ? serverDoc.data() : {};
-      // Merge arrays by id: prefer local records when IDs match, but include any server-only records.
-      const mergeById = (serverArr, localArr, markRemoteSynced=false)=>{
-        const map = new Map();
-        (serverArr||[]).forEach(item=>{ if(item && item.id) map.set(item.id, item); });
-        (localArr||[]).forEach(item=>{ if(item && item.id) map.set(item.id, item); });
-        const out = Array.from(map.values()).map(item => {
-          if(markRemoteSynced) return {...item, synced:true};
-          return item;
-        });
-        return out;
-      };
-      const mergedSales = mergeById(serverData.sales||[], DB.getSales(), true);
-      const mergedInventory = mergeById(serverData.inventory||[], DB.getInventory(), false);
-      const mergedAudit = mergeById(serverData.audit||[], DB.getAudit(), false);
-      const mergedProfile = { ...(serverData.profile||{}), ...(localProfile||{}) };
-      const payload = {
-        email: user.email,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        sales: mergedSales,
-        inventory: mergedInventory,
-        audit: mergedAudit,
-        profile: mergedProfile,
-        syncQueue: DB.getSyncQueue(),
-        syncState: DB.getSyncState(),
-      };
-      tx.set(docRef, payload, { merge: true });
-    });
-    lastLocalFirestoreWriteAt = Date.now();
-  }catch(err){
-    console.error('saveUserDataToFirestore failed (data remains queued for retry):', err);
-    throw err;
+  if(sessionRecoveryRequired){
+    console.warn('Blocked Firestore write: sessionRecoveryRequired');
+    throw new Error('Session invalid - write blocked');
   }
-}
-
-async function pushLocalSyncStateToFirestore(){
-  try{
-    const user = getCurrentUser();
-    if(!user || !firebaseStore) return false;
-    const normalized = normalizeAccountId(user.email);
-    const syncState = DB.getSyncState(normalized) || {};
-    const docRef = firebaseStore.collection('users').doc(user.uid);
-    await docRef.set({ syncState }, { merge: true });
-    // update local timestamp reflecting remote write
-    lastLocalFirestoreWriteAt = Date.now();
-    return true;
-  }catch(err){
-    console.warn('pushLocalSyncStateToFirestore failed:', err);
-    return false;
+  const user=getCurrentUser();
+  if(!user||!firebaseStore) return;
+  const normalized=normalizeAccountId(user.email);
+  const profile=getOwnerProfileData(normalized);
+  const existingPin = DB.getScoped(OWNER_PIN_KEY, normalized);
+  if(existingPin){
+    profile.pin = existingPin;
   }
+  const existingPassword = DB.getScoped(USER_PASSWORD_KEY, normalized);
+  if(existingPassword){
+    profile.passwordHash = isPasswordHash(existingPassword)
+      ? existingPassword
+      : await hashPasswordForStorage(existingPassword);
+  }
+  const docRef=firebaseStore.collection('users').doc(user.uid);
+  await docRef.set({
+    email:user.email,
+    updatedAt:firebase.firestore.FieldValue.serverTimestamp(),
+    sales:DB.getSales(),
+    inventory:DB.getInventory(),
+    audit:DB.getAudit(),
+    profile,
+    syncQueue:DB.getSyncQueue(),
+    syncState:DB.getSyncState(),
+  },{merge:true});
+  lastLocalFirestoreWriteAt = Date.now();
 }
 
 async function loadUserDataFromFirestore(){
-  try{
-    const user=getCurrentUser();
-    if(!user||!firebaseStore) return;
-    const normalized=normalizeAccountId(user.email);
-    const doc=await firebaseStore.collection('users').doc(user.uid).get();
-    if(!doc.exists) return;
-    const data=doc.data();
-    const queue=DB.getSyncQueue();
-    const pendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
-    const pendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
-    const pendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
-    if(data.sales) DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, pendingSaleIds, true));
-    if(data.inventory){
-      DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, pendingInventoryIds));
-      renderInventory();
-      populateProductDropdown();
-    }
-    if(data.audit) DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, pendingAuditIds));
-    if(data.profile && !queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo')){
-      DB.setScoped(OWNER_PROFILE_KEY, data.profile, normalized);
-    }
-    if(data.profile?.pin){
-      setOwnerPin(data.profile.pin, normalized);
-    }
-    if(data.pin){
-      setOwnerPin(data.pin, normalized);
-    }
-    if(data.profile?.passwordHash){
-      DB.setScoped(USER_PASSWORD_KEY, data.profile.passwordHash, normalized);
-    }
-    if(data.syncState){
-      DB.setSyncState(data.syncState, normalized);
-    }
-    const prunedQueue = pruneRemoteSyncQueue(data);
-    if(prunedQueue.length !== queue.length){
-      const updatedPendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
-      const updatedPendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
-      const updatedPendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
-      if(data.sales){
-        DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, updatedPendingSaleIds, true));
-      }
-      if(data.inventory){
-        DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, updatedPendingInventoryIds));
-      }
-      if(data.audit){
-        DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, updatedPendingAuditIds));
-      }
-    }
-    refreshSyncBadge();
-    renderOwnerProfile();
-  }catch(err){
-    console.error('loadUserDataFromFirestore failed (local data preserved):', err);
+  const user=getCurrentUser();
+  if(!user||!firebaseStore) return;
+  const normalized=normalizeAccountId(user.email);
+  const doc=await firebaseStore.collection('users').doc(user.uid).get();
+  if(!doc.exists) return;
+  const data=doc.data();
+  const queue=DB.getSyncQueue();
+  const pendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+  const pendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+  const pendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
+  if(data.sales) DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, pendingSaleIds, true));
+  if(data.inventory){
+    DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, pendingInventoryIds, true));
+    renderInventory();
+    populateProductDropdown();
   }
+  if(data.audit) DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, pendingAuditIds, true));
+  if(data.profile && !queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo')){
+    DB.setScoped(OWNER_PROFILE_KEY, data.profile, normalized);
+  }
+  if(data.profile?.pin){
+    setOwnerPin(data.profile.pin, normalized);
+  }
+  if(data.pin){
+    setOwnerPin(data.pin, normalized);
+  }
+  if(data.profile?.passwordHash){
+    DB.setScoped(USER_PASSWORD_KEY, data.profile.passwordHash, normalized);
+  }
+  if(data.syncState){
+    DB.setSyncState(data.syncState, normalized);
+  }
+  const prunedQueue = pruneRemoteSyncQueue(data);
+  if(prunedQueue.length !== queue.length){
+    const updatedPendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+    const updatedPendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+    const updatedPendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
+    if(data.sales){
+      DB.setSales(mergeRemoteRecords(DB.getSales(), data.sales, updatedPendingSaleIds, true));
+    }
+    if(data.inventory){
+      DB.setInventory(mergeRemoteRecords(DB.getInventory(), data.inventory, updatedPendingInventoryIds, true));
+    }
+    if(data.audit){
+      DB.setAudit(mergeRemoteRecords(DB.getAudit(), data.audit, updatedPendingAuditIds, true));
+    }
+  }
+  refreshSyncBadge();
+  renderOwnerProfile();
 }
 
 async function firebaseSignIn(email,password){
@@ -2232,7 +2408,11 @@ function attachRemoteFirestoreListener(user){
       const isRecentLocalWrite = Date.now() - lastLocalFirestoreWriteAt < 4000;
       await mergeRemoteFirestoreSnapshotData(data, isInitial || isRecentLocalWrite, isRecentLocalWrite);
     }, (err)=>{
-      console.warn('Firestore realtime listener error:', err);
+      if(isAuthError(err)){
+        handleAuthFailure(err);
+      } else {
+        console.warn('Firestore realtime listener error:', err);
+      }
     });
   }catch(err){
     console.warn('Failed to attach Firestore listener:', err);
@@ -2240,96 +2420,99 @@ function attachRemoteFirestoreListener(user){
 }
 
 async function mergeRemoteFirestoreSnapshotData(data, isInitialSnapshot=false, suppressNotification=false){
-  try{
-    const user=getCurrentUser();
-    const normalized=normalizeAccountId(user?.email || getCurrentAccount());
-    const queue=DB.getSyncQueue();
-    const pendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
-    const pendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
-    const pendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
-    let changed=false;
-    const currentSales=DB.getSales();
-    const currentInventory=DB.getInventory();
-    const currentAudit=DB.getAudit();
+  const user=getCurrentUser();
+  const normalized=normalizeAccountId(user?.email || getCurrentAccount());
+  const queue=DB.getSyncQueue();
+  const pendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+  const pendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+  const pendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
+  let changed=false;
+  const currentSales=DB.getSales();
+  const currentInventory=DB.getInventory();
+  const currentAudit=DB.getAudit();
+  if(Array.isArray(data.sales)){
+    const merged=mergeRemoteRecords(currentSales, data.sales, pendingSaleIds, true);
+    if(JSON.stringify(merged) !== JSON.stringify(currentSales)){
+      DB.setSales(merged);
+      changed=true;
+    }
+  }
+  if(Array.isArray(data.inventory)){
+    const merged=mergeRemoteRecords(currentInventory, data.inventory, pendingInventoryIds, true);
+    if(JSON.stringify(merged) !== JSON.stringify(currentInventory)){
+      DB.setInventory(merged, normalized);
+      changed=true;
+      renderInventory();
+      populateProductDropdown();
+    }
+  }
+  if(Array.isArray(data.audit)){
+    const merged=mergeRemoteRecords(currentAudit, data.audit, pendingAuditIds, true);
+    if(JSON.stringify(merged) !== JSON.stringify(currentAudit)){
+      DB.setAudit(merged);
+      changed=true;
+    }
+  }
+  const hasPendingProfileUpdate = queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo');
+  if(data.profile && !hasPendingProfileUpdate){
+    DB.setScoped(OWNER_PROFILE_KEY, data.profile, normalized);
+    changed=true;
+    renderOwnerProfile();
+  }
+  if(data.profile?.pin){
+    setOwnerPin(data.profile.pin, normalized);
+    changed=true;
+  }
+  if(data.pin){
+    setOwnerPin(data.pin, normalized);
+    changed=true;
+  }
+  if(data.syncState){
+    DB.setSyncState(data.syncState, normalized);
+    changed=true;
+  }
+  const prunedQueue = pruneRemoteSyncQueue(data);
+  if(prunedQueue.length !== queue.length){
+    changed=true;
+    const updatedPendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
+    const updatedPendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
+    const updatedPendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
     if(Array.isArray(data.sales)){
-      const merged=mergeRemoteRecords(currentSales, data.sales, pendingSaleIds, true);
-      if(JSON.stringify(merged) !== JSON.stringify(currentSales)){
+      const merged=mergeRemoteRecords(DB.getSales(), data.sales, updatedPendingSaleIds, true);
+      if(JSON.stringify(merged) !== JSON.stringify(DB.getSales())){
         DB.setSales(merged);
-        changed=true;
       }
     }
     if(Array.isArray(data.inventory)){
-      const merged=mergeRemoteRecords(currentInventory, data.inventory, pendingInventoryIds);
-      if(JSON.stringify(merged) !== JSON.stringify(currentInventory)){
+      const merged=mergeRemoteRecords(DB.getInventory(), data.inventory, updatedPendingInventoryIds, true);
+      if(JSON.stringify(merged) !== JSON.stringify(DB.getInventory())){
         DB.setInventory(merged, normalized);
-        changed=true;
         renderInventory();
         populateProductDropdown();
       }
     }
     if(Array.isArray(data.audit)){
-      const merged=mergeRemoteRecords(currentAudit, data.audit, pendingAuditIds);
-      if(JSON.stringify(merged) !== JSON.stringify(currentAudit)){
+      const merged=mergeRemoteRecords(DB.getAudit(), data.audit, updatedPendingAuditIds, true);
+      if(JSON.stringify(merged) !== JSON.stringify(DB.getAudit())){
         DB.setAudit(merged);
-        changed=true;
       }
     }
-    const hasPendingProfileUpdate = queue.some(item=>item.op==='update_profile' || item.op==='update_owner_photo');
-    if(data.profile && !hasPendingProfileUpdate){
-      DB.setScoped(OWNER_PROFILE_KEY, data.profile, normalized);
-      changed=true;
-      renderOwnerProfile();
+  }
+  if(changed){
+    refreshSyncBadge();
+    renderDashboard();
+    renderSessionTable();
+    renderRecords();
+    if(!isInitialSnapshot && !suppressNotification){
+      // Only notify when the remote snapshot was last synced by a different device.
+      let remoteDevice = null;
+      try{
+        remoteDevice = (data && data.syncState && data.syncState.lastSyncedDevice) || data.deviceId || null;
+      }catch(_e){ remoteDevice = null; }
+      const localDevice = getDeviceId();
+      const showNotification = remoteDevice ? (remoteDevice !== localDevice) : true;
+      if(showNotification) toast('Cloud updates received from another device.','success');
     }
-    if(data.profile?.pin){
-      setOwnerPin(data.profile.pin, normalized);
-      changed=true;
-    }
-    if(data.pin){
-      setOwnerPin(data.pin, normalized);
-      changed=true;
-    }
-    if(data.syncState){
-      DB.setSyncState(data.syncState, normalized);
-      changed=true;
-    }
-    const prunedQueue = pruneRemoteSyncQueue(data);
-    if(prunedQueue.length !== queue.length){
-      changed=true;
-      const updatedPendingSaleIds=getPendingIdsForOpTypes(['upsert_sale','delete_sale']);
-      const updatedPendingInventoryIds=getPendingIdsForOpTypes(['upsert_inventory','delete_inventory']);
-      const updatedPendingAuditIds=getPendingIdsForOpTypes(['append_audit']);
-      if(Array.isArray(data.sales)){
-        const merged=mergeRemoteRecords(DB.getSales(), data.sales, updatedPendingSaleIds, true);
-        if(JSON.stringify(merged) !== JSON.stringify(DB.getSales())){
-          DB.setSales(merged);
-        }
-      }
-      if(Array.isArray(data.inventory)){
-        const merged=mergeRemoteRecords(DB.getInventory(), data.inventory, updatedPendingInventoryIds);
-        if(JSON.stringify(merged) !== JSON.stringify(DB.getInventory())){
-          DB.setInventory(merged, normalized);
-          renderInventory();
-          populateProductDropdown();
-        }
-      }
-      if(Array.isArray(data.audit)){
-        const merged=mergeRemoteRecords(DB.getAudit(), data.audit, updatedPendingAuditIds);
-        if(JSON.stringify(merged) !== JSON.stringify(DB.getAudit())){
-          DB.setAudit(merged);
-        }
-      }
-    }
-    if(changed){
-      refreshSyncBadge();
-      renderDashboard();
-      renderSessionTable();
-      renderRecords();
-      if(!isInitialSnapshot && !suppressNotification){
-        toast('Cloud updates received from another device.','success');
-      }
-    }
-  }catch(err){
-    console.error('mergeRemoteFirestoreSnapshotData failed (local data preserved):', err);
   }
 }
 
@@ -2379,7 +2562,7 @@ function pruneRemoteSyncQueue(remoteData){
   if(!queue.length) return queue;
   const salesMap=new Map((remoteData.sales||[]).map(item=>[item?.id, item]));
   const inventoryMap=new Map((remoteData.inventory||[]).map(item=>[item?.id, item]));
-  const auditMap=new Map((remoteData.audit||[]).map(item=>[item?.id, item]));
+  const auditMap=new Map((remoteData.audit||[]).map(item=>[item?.id || item?.auditId, item]));
   const profileData = remoteData.profile || {};
   const normalized = normalizeAccountId(getCurrentUser()?.email || getCurrentAccount());
 
@@ -2399,7 +2582,7 @@ function pruneRemoteSyncQueue(remoteData){
       case 'upsert_inventory':{
         const remoteItem = inventoryMap.get(payload.id);
         if(!remoteItem) return true;
-        return !areRecordsEqual(payload, remoteItem);
+        return !areRecordsEqual(payload, remoteItem, ['synced','syncStatus']);
       }
       case 'delete_inventory':{
         const remoteItem = inventoryMap.get(payload.id);
@@ -2410,10 +2593,24 @@ function pruneRemoteSyncQueue(remoteData){
         return !remoteAudit;
       }
       case 'update_profile':{
-        return !areRecordsEqual(payload, profileData);
+        const localPhoto = payload.imageData || payload.photo || '';
+        const comparablePayload = {
+          ...payload,
+          photo: localPhoto,
+        };
+        return !areRecordsEqual(comparablePayload, profileData, [
+          'synced',
+          'syncStatus',
+          'updatedAt',
+          'createdAt',
+          'authProvider',
+          'passwordHash',
+          'pin',
+        ]);
       }
       case 'update_owner_photo':{
-        return profileData.photo !== payload.photo;
+        const localPhoto = payload.imageData || payload.photo || '';
+        return (profileData.photo || '') !== localPhoto;
       }
       default:
         return true;
@@ -2442,20 +2639,27 @@ function areRecordsEqual(a,b,ignoreKeys=[]){
   return true;
 }
 
+function getRecordSyncKey(record){
+  if(!record || typeof record !== 'object') return undefined;
+  return record.id || record.auditId;
+}
+
 function mergeRemoteRecords(localRecords, remoteRecords, pendingIds, markRemoteSynced=false){
   const merged=[];
-  const remoteMap=new Map((remoteRecords||[]).map(item=>[item?.id, item]));
+  const remoteMap=new Map((remoteRecords||[]).map(item=>[getRecordSyncKey(item), item]));
   for(const record of localRecords||[]){
-    if(record && record.id && pendingIds.has(record.id)){
+    const key = getRecordSyncKey(record);
+    if(key && pendingIds.has(key)){
       merged.push(record);
-      remoteMap.delete(record.id);
+      remoteMap.delete(key);
     }
   }
   for(const record of remoteRecords||[]){
-    if(!record || !record.id) continue;
-    if(pendingIds.has(record.id)) continue;
+    const key = getRecordSyncKey(record);
+    if(!key) continue;
+    if(pendingIds.has(key)) continue;
     if(markRemoteSynced && typeof record === 'object'){
-      merged.push({ ...record, synced: true });
+      merged.push({ ...record, synced: true, syncStatus: 'synced' });
     } else {
       merged.push(record);
     }
@@ -2463,18 +2667,80 @@ function mergeRemoteRecords(localRecords, remoteRecords, pendingIds, markRemoteS
   return merged;
 }
 
+function computePendingSyncCount(){
+  const pendingIds = new Set();
+  const queue = DB.getSyncQueue();
+  for(const item of queue||[]){
+    if(!item || !item.op || !item.payload) continue;
+    const payload = item.payload;
+    switch(item.op){
+      case 'upsert_sale':
+      case 'delete_sale':
+      case 'upsert_inventory':
+      case 'delete_inventory':
+        if(payload.id) pendingIds.add(`${item.op}:${payload.id}`);
+        break;
+      case 'append_audit':
+        if(payload.auditId) pendingIds.add(`audit:${payload.auditId}`);
+        else if(payload.id) pendingIds.add(`audit:${payload.id}`);
+        break;
+      case 'update_profile':
+        pendingIds.add('update_profile');
+        break;
+      case 'update_owner_photo':
+        pendingIds.add('update_owner_photo');
+        break;
+      default:
+        if(payload.id) pendingIds.add(`${item.op}:${payload.id}`);
+    }
+  }
+  for(const sale of DB.getSales().filter(s=>!s.synced||s.syncStatus==='pending')){
+    if(sale && sale.id) pendingIds.add(`upsert_sale:${sale.id}`);
+  }
+  for(const item of DB.getInventory().filter(i=>!i.synced||i.syncStatus==='pending')){
+    if(item && item.id) pendingIds.add(`upsert_inventory:${item.id}`);
+  }
+  for(const audit of DB.getAudit().filter(a=>!a.synced||a.syncStatus==='pending')){
+    if(audit && audit.auditId) pendingIds.add(`audit:${audit.auditId}`);
+    else if(audit && audit.id) pendingIds.add(`audit:${audit.id}`);
+  }
+  return pendingIds.size;
+}
+
+function debugPendingSyncState(){
+  const queue = DB.getSyncQueue();
+  const unsyncedSales = DB.getSales().filter(s=>!s.synced||s.syncStatus==='pending');
+  const unsyncedInventory = DB.getInventory().filter(i=>!i.synced||i.syncStatus==='pending');
+  const unsyncedAudit = DB.getAudit().filter(a=>!a.synced||a.syncStatus==='pending');
+  const result = {
+    pendingCount: computePendingSyncCount(),
+    queueLength: queue.length,
+    queue: queue.map(item=>({ id:item?.id, op:item?.op, payload:item?.payload, at:item?.at })),
+    unsyncedSalesCount: unsyncedSales.length,
+    unsyncedInventoryCount: unsyncedInventory.length,
+    unsyncedAuditCount: unsyncedAudit.length,
+    unsyncedSales: unsyncedSales.slice(0,20),
+    unsyncedInventory: unsyncedInventory.slice(0,20),
+    unsyncedAudit: unsyncedAudit.slice(0,20),
+    syncState: DB.getSyncState(),
+  };
+  console.group('Debug Pending Sync State');
+  console.log(result);
+  console.groupEnd();
+  return result;
+}
+
+window.debugPendingSyncState = debugPendingSyncState;
+
 function refreshSyncBadge(){
   const badge=document.getElementById('pending-sync-badge');
   if(!badge)return;
   if(syncInProgress){
     badge.textContent='Syncing...';
     badge.className='badge badge-pending';
-    refreshBackupStatus();
     return;
   }
-  const queueCount=DB.getSyncQueue().length;
-  const pendingSales=DB.getSales().filter(s=>!s.synced).length;
-  const pending=queueCount||pendingSales;
+  const pending = computePendingSyncCount();
   if(pending){
     badge.textContent=`${pending} pending`;
     badge.className='badge badge-pending';
@@ -2482,45 +2748,6 @@ function refreshSyncBadge(){
     badge.textContent='Synced';
     badge.className='badge badge-synced';
   }
-  refreshBackupStatus();
-}
-
-function refreshBackupStatus(){
-  const statusEl = document.getElementById('backup-status');
-  if(!statusEl) return;
-  const syncState = DB.getSyncState();
-  const queueCount = DB.getSyncQueue().length;
-  const pendingSales = DB.getSales().filter(s => !s.synced).length;
-  const pending = queueCount || pendingSales;
-  const lastSyncedEl = document.getElementById('last-synced-at');
-  if(syncInProgress){
-    statusEl.textContent = 'Backup in progress...';
-    statusEl.className = 'backup-status backup-pending';
-    if(lastSyncedEl) lastSyncedEl.textContent = '';
-    return;
-  }
-  if(pending){
-    statusEl.textContent = 'Pending sync';
-    statusEl.className = 'backup-status backup-pending';
-    if(lastSyncedEl) lastSyncedEl.textContent = '';
-    return;
-  }
-  if(syncState?.lastStatus === 'failed'){
-    const errorText = String(syncState.lastError || 'FAILED').trim();
-    statusEl.textContent = `Backup issue: ${errorText}`;
-    statusEl.className = 'backup-status backup-failed';
-    if(lastSyncedEl) lastSyncedEl.textContent = syncState?.lastSyncedAt ? `Last: ${new Date(syncState.lastSyncedAt).toLocaleString()}` : '';
-    return;
-  }
-  if(syncState?.lastStatus === 'success'){
-    statusEl.textContent = 'Backup synced';
-    statusEl.className = 'backup-status backup-success';
-    if(lastSyncedEl) lastSyncedEl.textContent = syncState?.lastSyncedAt ? `Last: ${new Date(syncState.lastSyncedAt).toLocaleString()}` : '';
-    return;
-  }
-  statusEl.textContent = '';
-  statusEl.className = 'backup-status';
-  if(lastSyncedEl) lastSyncedEl.textContent = '';
 }
 
 function normalizeAuditEntries(){
@@ -2614,53 +2841,45 @@ async function testInternetConnectivity(){
  */
 function updateConnectionStatusUI(isOnline){
   const overlay = document.getElementById('login-overlay');
+  if(!overlay) return;
+  
   let statusEl = document.getElementById('connection-status-bar');
-  const overlayVisible = overlay && window.getComputedStyle(overlay).display !== 'none';
-
-  if(!overlayVisible){
-    if(statusEl){
-      statusEl.remove();
-    }
-    lastNetworkOnline = isOnline;
-    return;
-  }
-
+  
   if(isOnline){
     if(statusEl){
       statusEl.remove();
     }
     lastNetworkOnline = true;
-    return;
+  } else {
+    if(!statusEl){
+      statusEl = document.createElement('div');
+      statusEl.id = 'connection-status-bar';
+      statusEl.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(90deg, #ff6b6b 0%, #ff4757 100%);
+        color: white;
+        padding: 0.75rem 1rem;
+        text-align: center;
+        font-weight: 600;
+        font-size: 0.95rem;
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      `;
+      statusEl.innerHTML = `
+        <span style="font-size:1rem;">??</span>
+        <span>Offline mode � email login is unavailable. Use PIN unlock.</span>
+      `;
+      document.body.insertBefore(statusEl, document.body.firstChild);
+    }
+    lastNetworkOnline = false;
   }
-
-  if(!statusEl){
-    statusEl = document.createElement('div');
-    statusEl.id = 'connection-status-bar';
-    statusEl.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      background: linear-gradient(90deg, #ff6b6b 0%, #ff4757 100%);
-      color: white;
-      padding: 0.75rem 1rem;
-      text-align: center;
-      font-weight: 600;
-      font-size: 0.95rem;
-      z-index: 10000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.75rem;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-    statusEl.innerHTML = `
-      <span style="font-size:1rem;">⚠️</span>
-      <span>Offline mode — email login is unavailable. Use PIN unlock.</span>
-    `;
-    document.body.insertBefore(statusEl, document.body.firstChild);
-  }
-  lastNetworkOnline = false;
 }
 
 /**
@@ -2674,9 +2893,9 @@ async function checkAndUpdateConnectionStatus(){
     
     // Show toast notification of status change
     if(isOnline){
-      toast('✅ Internet connection restored', 'success');
+      toast('? Internet connection restored', 'success');
     } else {
-      toast('❌ Internet connection lost', 'warning');
+      toast('? Internet connection lost', 'warning');
     }
   }
 }
@@ -2688,16 +2907,6 @@ async function doLogin(){
   const loginButton=document.getElementById('login-submit-btn');
   const originalText = loginButton?.textContent || 'LOG IN';
   
-  if(Date.now() < loginCooldownExpiresAt){
-    const remainingSeconds = Math.ceil((loginCooldownExpiresAt - Date.now()) / 1000);
-    el.textContent = `Too many login attempts detected. Please wait ${remainingSeconds} second${remainingSeconds === 1 ? '' : 's'} before trying again.`;
-    if(loginButton){
-      loginButton.disabled = true;
-      loginButton.textContent = originalText;
-    }
-    return;
-  }
-
   if(!email||!password){
     el.textContent='Please enter email and password.';
     return;
@@ -2712,11 +2921,11 @@ async function doLogin(){
   const profile=getOwnerProfileData();
   const isRegisteredEmail = profile.email.toLowerCase()===email.toLowerCase();
   // Enforce online Firebase authentication for email/password logins.
-  // When offline, email logins are disabled — use PIN unlock instead.
+  // When offline, email logins are disabled � use PIN unlock instead.
   if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()){
     el.innerHTML = `
       <div style="display:flex; align-items:center; gap:0.5rem;">
-        <span style="font-size:1.2rem;">📡</span>
+        <span style="font-size:1.2rem;">??</span>
         <div>
           <strong>Offline</strong>
           <br>
@@ -2732,10 +2941,7 @@ async function doLogin(){
     justLoggedIn=true;
     await firebaseSignIn(email,password);
     setCurrentAccount(email);
-    const profile=getOwnerProfileData(email);
-    if(profile.authProvider==='local'){
-      await setUserPassword(password, email);
-    }
+    await setUserPassword(password, email);
     await saveUserDataToFirestore();
     return;
   }catch(err){
@@ -2748,26 +2954,27 @@ async function doLogin(){
         message = 'Please enter a valid email address.';
       } else if(err?.code === 'auth/user-not-found' || err?.code === 'auth/invalid-login-credentials'){
         message = isRegisteredEmail ? 'Account deleted or incorrect password. Please register a new account or verify your credentials.' : 'No account found with that email. Please register or check your email.';
-      } else if(err?.code === 'auth/too-many-requests'){
-        const waitSeconds = 300;
-        if(loginButton){ loginButton.disabled = true; }
-        startLoginCooldown(waitSeconds);
-        message = `Too many login attempts detected. Please wait ${Math.ceil(waitSeconds/60)} minute${waitSeconds===60 ? '' : 's'} before trying again.`;
       } else if(err?.code === 'auth/network-request-failed' || /network|offline|timeout/i.test(err?.message||'')){
         // Double-check: if we get a network error, inform user to check connection
         const recheck = await testInternetConnectivity();
         if(!recheck){
-          message = '📡 Internet connection lost. Unable to verify your credentials. Please check your connection and try again.';
+          message = '?? Internet connection lost. Unable to verify your credentials. Please check your connection and try again.';
         } else {
           message = 'Unable to reach the authentication server. This may be a temporary issue. Please try again.';
         }
       }
       el.textContent = message;
-      if(loginButton && err?.code !== 'auth/too-many-requests'){ loginButton.disabled=false; loginButton.textContent=originalText; }
+      if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
       return;
     }
   
-  // Local password-based logins are no longer accepted for this flow.
+  if(localAuth){
+    // Local password-based logins are no longer accepted.
+    el.textContent = 'Email/password login is not available offline. Use PIN unlock.';
+    if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
+    return;
+  }
+  
   el.textContent = isRegisteredEmail ? 'Incorrect password. Please try again.' : 'Incorrect email or password. Please try again.';
   if(loginButton){ loginButton.disabled=false; loginButton.textContent=originalText; }
 }
@@ -2777,7 +2984,7 @@ async function doAdminLogin(){
   const password=(document.getElementById('admin-auth-password')||{}).value?.trim();
   const errorEl=document.getElementById('admin-login-error');
   const loginButton=document.getElementById('admin-login-submit-btn');
-  const originalText = loginButton?.textContent || '🔒 ADMIN LOGIN';
+  const originalText = loginButton?.textContent || '?? ADMIN LOGIN';
   if(!email||!password){
     if(errorEl){ errorEl.textContent='Enter admin email and password.'; errorEl.style.display='block'; }
     return;
@@ -3327,25 +3534,21 @@ function uploadOwnerPhoto(){
           DB.set('owner_photo', imageData);
         }
         // Sync to backend (queued op); the profile.photo above will be uploaded during sync
-        const ownerData = { type: 'owner_photo', imageData, uploadedAt: new Date().toISOString() };
-        queueSync('update_owner_photo', ownerData);
+        queueOwnerPhotoUpdate(imageData, false);
 
         // If online, attempt immediate cloud sync so photo is available across devices without manual steps
         if(navigator.onLine){
-          // If Firebase auth is available and user is signed in, write profile directly for fastest visibility
           if(typeof firebaseAuth !== 'undefined' && getCurrentUser()){
             saveUserDataToFirestore().then(()=>{
               refreshSyncBadge();
               toast('Photo uploaded and synced to cloud.','success');
             }).catch(err=>{
               console.warn('Immediate profile upload failed, will retry:', err);
-              // Ensure there's a scheduled retry
               scheduleOfflineSyncRetry();
               toast('Photo saved locally. Will sync automatically when network stabilizes.','warning');
             });
           } else {
-            // Fallback: run the general syncToCloud which pushes queued ops
-            syncToCloud(false).then((r)=>{
+            syncToCloud(false).then(()=>{
               toast('Photo uploaded and synced to cloud.','success');
             }).catch((err)=>{
               console.warn('Sync-to-cloud failed after photo upload:', err);
@@ -3404,7 +3607,6 @@ function loadOwnerPhoto(){
 }
 
 function startupInitialize(){
-  console.log('startupInitialize() called, document.readyState=', document.readyState);
   const firebaseConfigPromise = (window.electronAPI && window.electronAPI.getFirebaseConfig)
     ? window.electronAPI.getFirebaseConfig().then(config=>{
         if(config && typeof config === 'object'){
@@ -3448,7 +3650,7 @@ function startupInitialize(){
         toast('Firebase config is missing. Run the Electron app with .env.local or add a browser config in window.FIREBASE_CONFIG.','warning');
       }
     }
-    initFirebase();
+    await initFirebase();
     updateAuthActions();
     await resolveOwnerEmailConfig().then(updateAuthActions).catch(()=>updateAuthActions());
   }).catch((err)=>{
@@ -3456,7 +3658,6 @@ function startupInitialize(){
   });
 }
 
-console.log('script.js loaded, document.readyState=', document.readyState);
 if(document.readyState==='interactive' || document.readyState==='complete'){
   startupInitialize();
 } else {
@@ -3548,23 +3749,10 @@ function checkNet(){
   refreshSyncBadge();
   return online;
 }
-async function ensureCloudAccountForLocalUser(force=false){
+async function ensureCloudAccountForLocalUser(){
   await firebaseReadyPromise;
   if(!navigator.onLine || !firebaseAuth || !isFirebaseConfigured()) return false;
   if(getCurrentUser()) return true;
-  
-  // Check backoff before attempting auto-login (can be bypassed by callers when necessary)
-  if(!force && !shouldRetryAutoLogin()){
-    const status = getAutoLoginBackoffStatus();
-    if(status && status.maxRetriesReached){
-      console.warn('Auto-login blocked: too many failed attempts. User must manually sign in.');
-      return false;
-    } else if(status){
-      console.warn(`Auto-login backoff active. Retry in ${status.remainingSeconds}s.`);
-      return false;
-    }
-  }
-  
   const primary=getPrimaryAccountEmail();
   const profile=primary?getOwnerProfileData(primary):getOwnerProfileData();
   if(!profile.email) return false;
@@ -3573,22 +3761,18 @@ async function ensureCloudAccountForLocalUser(force=false){
   try{
     await firebaseSignIn(profile.email,password);
     attachRemoteFirestoreListener(getCurrentUser());
-    clearAutoLoginBackoff();
     return true;
   }catch(err){
     console.error('ensureCloudAccountForLocalUser failed for', profile.email, err);
-    recordAutoLoginFailure();
     // Provide actionable, non-sensitive feedback to the user and logs for debugging
     if(err?.code === 'auth/user-not-found' && profile.authProvider === 'local'){
       try{
         await firebaseSignUp(profile.email,password);
         toast('Local account synced to Firebase successfully.','success');
         attachRemoteFirestoreListener(getCurrentUser());
-        clearAutoLoginBackoff();
         return true;
       }catch(signUpErr){
         console.error('Auto sign-up also failed for', profile.email, signUpErr);
-        recordAutoLoginFailure();
         if(signUpErr?.code === 'auth/email-already-in-use'){
           toast('This email already exists in Firebase. Please sign in manually.','warning');
         } else if(isFirebaseNetworkError(signUpErr)){
@@ -3608,39 +3792,6 @@ async function ensureCloudAccountForLocalUser(force=false){
   }
 }
 
-/**
- * Aggressively attempt to sync pending data shortly after app start.
- * Makes a small number of quick retries to ensure devices that are online
- * don't stay stuck with pending queue items.
- */
-async function attemptImmediateSyncOnStart(attempts=5){
-  try{
-    for(let i=0;i<attempts;i++){
-      const hasPending = DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
-      if(!hasPending) return true;
-      if(!navigator.onLine) return false;
-
-      // Try to ensure cloud auth (force bypass backoff briefly)
-      await ensureCloudAccountForLocalUser(true).catch(()=>{});
-      attachRemoteFirestoreListener(getCurrentUser());
-      // Try loading remote snapshot to merge changes
-      if(getCurrentUser()){
-        await loadUserDataFromFirestore().catch(()=>{});
-      }
-
-      // Try syncing to cloud
-      const ok = await syncToCloud(true).catch(()=>false);
-      if(ok) return true;
-
-      // Wait a short, exponentially increasing delay before next attempt
-      await new Promise(resolve=>setTimeout(resolve, 1000 * Math.pow(2, Math.min(i,4))));
-    }
-  }catch(e){
-    console.warn('attemptImmediateSyncOnStart failed:', e);
-  }
-  return false;
-}
-
 window.addEventListener('online',async ()=>{
   checkNet();
   await ensureCloudAccountForLocalUser();
@@ -3648,7 +3799,7 @@ window.addEventListener('online',async ()=>{
   if(getCurrentUser()){
     await loadUserDataFromFirestore();
   }
-  const hasPending=DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
+  const hasPending=computePendingSyncCount()>0;
   if(hasPending){
     toast('Internet restored! Backing up offline data...','info');
     syncToCloud(false);
@@ -3660,7 +3811,7 @@ window.addEventListener('offline',()=>{
 });
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible' && navigator.onLine){
-    const hasPending=DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
+    const hasPending=computePendingSyncCount()>0;
     if(hasPending){
       syncToCloud(true);
     }
@@ -4461,6 +4612,10 @@ function getReasonCategory(reason){
 
 async function syncToCloud(silent=false){
   if(syncInProgress)return false;
+  if(sessionRecoveryRequired){
+    if(!silent) toast('Session expired — sign in again to resume sync.','danger');
+    return false;
+  }
   if(!navigator.onLine){
     if(!silent)toast('No internet. Data saved locally. Will sync when connected.','warning');
     return false;
@@ -4484,8 +4639,8 @@ async function syncToCloud(silent=false){
     return false;
   }
   const queue=DB.getSyncQueue();
-  const unSyncedSales=DB.getSales().filter(s=>!s.synced).length;
-  if(queue.length===0 && unSyncedSales===0){
+  const pending = computePendingSyncCount();
+  if(pending===0){
     refreshSyncBadge();
     return true;
   }
@@ -4529,30 +4684,50 @@ async function syncToCloud(silent=false){
         firestoreSuccess=true;
       }catch(e){
         console.error('Firestore sync failed:',e);
+        if(isAuthError(e)){
+          // Trigger session recovery flow for auth errors
+          try{ handleAuthFailure(e); }catch(_e){}
+        }
         syncErrors.push('Firebase: '+String(e));
       }
     }
-    if(googleSheetSuccess || firestoreSuccess){
-      const sales=DB.getSales().map(s=>({...s,synced:true}));
-      DB.setSales(sales);
+    const cloudSyncSuccess = canSaveFirestore ? firestoreSuccess : googleSheetSuccess;
+    if(cloudSyncSuccess){
+      const priorQueue = DB.getSyncQueue();
+      const priorSales = DB.getSales();
+      const priorInventory = DB.getInventory();
+      const priorAudit = DB.getAudit();
+      const priorSyncState = DB.getSyncState();
+
+      const syncedAt = new Date().toISOString();
+      DB.setSales(DB.getSales().map(s=>({...s,synced:true,syncStatus:'synced',lastSyncedAt:syncedAt})));
+      DB.setInventory(DB.getInventory().map(i=>({...i,synced:true,syncStatus:'synced',lastSyncedAt:syncedAt})));
+      DB.setAudit(DB.getAudit().map(a=>({...a,synced:true,syncStatus:'synced',lastSyncedAt:syncedAt})));
       DB.setSyncQueue([]);
       syncRetryCountOnline=0;
-      const lastSyncedAt = new Date().toISOString();
-      DB.setSyncState({lastSyncedAt, lastStatus:'success',synced:true, lastError:''});
-      DB.set('glr_last_sync_time', lastSyncedAt);
-      lastLocalFirestoreWriteAt = Date.now();
-      if(!silent)toast('✓ All offline data backed up to cloud successfully!','success');
+      DB.setSyncState({lastSyncedAt:new Date().toISOString(),lastStatus:'success',synced:true,lastSyncedDevice:getDeviceId()});
+
+      if(canSaveFirestore){
+        try{
+          await saveUserDataToFirestore();
+          lastLocalFirestoreWriteAt = Date.now();
+        }catch(e){
+          console.warn('Firestore save after queue-clear failed:', e);
+          DB.setSales(priorSales);
+          DB.setInventory(priorInventory);
+          DB.setAudit(priorAudit);
+          DB.setSyncQueue(priorQueue);
+          DB.setSyncState(priorSyncState);
+          throw e;
+        }
+      } else {
+        lastLocalFirestoreWriteAt = Date.now();
+      }
+
+      if(!silent)toast('? All offline data backed up to cloud successfully!','success');
       refreshSyncBadge();
       renderDashboard();renderSessionTable();renderRecords();
       stopOfflineSyncRetry();
-      // Ensure remote syncState is cleared in Firestore as well. If pushing fails, schedule a retry.
-      if(canSaveFirestore){
-        const pushed = await pushLocalSyncStateToFirestore().catch(()=>false);
-        if(!pushed){
-          console.warn('Unable to push syncState to Firestore; will retry later.');
-          scheduleOfflineSyncRetry();
-        }
-      }
       return true;
     }else if(syncErrors.length>0){
       DB.setSyncState({lastSyncedAt:new Date().toISOString(),lastStatus:'failed',lastError:syncErrors.join(' | ')});
@@ -4574,51 +4749,28 @@ async function syncToCloud(silent=false){
 }
 
 function scheduleOfflineSyncRetry(){
-  // Exponential backoff retry loop. Will retry indefinitely until queue is empty
-  if(offlineSyncRetryTimer) return; // already scheduled
-  const attempt = async ()=>{
-    offlineSyncRetryTimer = setTimeout(async ()=>{
-      offlineSyncRetryTimer = null;
-      if(navigator.onLine && !syncInProgress){
-        const hasPending = DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
-        if(hasPending){
-          const ok = await syncToCloud(true).catch(()=>false);
-          if(!ok){
-            syncRetryCountOnline = Math.min((syncRetryCountOnline||0) + 1, 10);
-            attempt();
-          } else {
-            syncRetryCountOnline = 0;
-          }
-        }
-      } else {
-        // Not online or already syncing — schedule next attempt when online event fires
+  if(sessionRecoveryRequired) return;
+  if(offlineSyncRetryTimer)clearInterval(offlineSyncRetryTimer);
+  offlineSyncRetryTimer=setInterval(()=>{
+    if(sessionRecoveryRequired) return;
+    if(navigator.onLine && !syncInProgress){
+      const hasPending=computePendingSyncCount()>0;
+      if(hasPending){
+        syncToCloud(true);
+      }else{
+        stopOfflineSyncRetry();
       }
-    }, Math.min(30000, 1000 * Math.pow(2, Math.min(syncRetryCountOnline, 6))));
-  };
-  attempt();
+    }
+  },2000);
 }
 
 function stopOfflineSyncRetry(){
   if(offlineSyncRetryTimer){
-    clearTimeout(offlineSyncRetryTimer);
+    clearInterval(offlineSyncRetryTimer);
     offlineSyncRetryTimer=null;
     syncRetryCountOnline=0;
   }
 }
-
-// Trigger immediate sync when network returns
-window.addEventListener && window.addEventListener('online', async ()=>{
-  toast('Internet connection restored — resuming sync.', 'info');
-  stopOfflineSyncRetry();
-  if(!syncInProgress){
-    const hasPending = DB.getSyncQueue().length>0 || DB.getSales().some(s=>!s.synced);
-    if(hasPending) await syncToCloud(true).catch(()=>{ scheduleOfflineSyncRetry(); });
-  }
-});
-
-window.addEventListener && window.addEventListener('offline', ()=>{
-  toast('Internet connection lost — changes will sync when online.', 'warning');
-});
 
 // BACKUP
 async function backupToCloud(){
@@ -4636,7 +4788,7 @@ function setUpdatePanelStatus(message,type=''){
   if(statusEl){
     statusEl.textContent = message;
   }
-  const prefix = type === 'success' ? '✅' : type === 'danger' ? '❌' : 'ℹ️';
+  const prefix = type === 'success' ? '?' : type === 'danger' ? '?' : '??';
   if(type === 'danger'){
     console.error(`${prefix} ${message}`);
   } else {
@@ -4681,7 +4833,7 @@ function setupUpdateEventHandlers(){
   if(typeof window.electronAPI.onUpdateAvailable === 'function'){
     window.electronAPI.onUpdateAvailable((info)=>{
       const sizeBytes = getUpdatePackageSize(info);
-      const sizeLabel = sizeBytes ? ` • ${formatBytes(sizeBytes)} MB` : '';
+      const sizeLabel = sizeBytes ? ` � ${formatBytes(sizeBytes)} MB` : '';
       const message = `Update available: version ${info?.version || 'new'}${sizeLabel}. Click download to install.`;
       toast(message,'success');
       setUpdatePanelStatus(message,'success');
@@ -4703,13 +4855,13 @@ function setupUpdateEventHandlers(){
       const details=document.getElementById('update-progress-details');
       if(details){
         details.textContent = percent !== null
-          ? `Downloading update — ${percent}% complete`
+          ? `Downloading update � ${percent}% complete`
           : `Downloading update...`;
       }
       const summary=document.getElementById('update-progress-summary');
       if(summary){
         summary.textContent = percent !== null
-          ? `${transferred} / ${total} MB • ${percent}% • ${speed} MB/s`
+          ? `${transferred} / ${total} MB � ${percent}% � ${speed} MB/s`
           : `Downloading...`;
       }
       if(totalBytes && details){
@@ -4888,17 +5040,16 @@ async function checkAppUpdate(){
 
 function hideAppLoader(){
   const loader=document.getElementById('app-loader');
-  if(loader){
-    loader.style.display='none';
-  }
+  if(loader){loader.style.display='none';}
 }
 
 function startAutoSyncLoop(){
+  if(sessionRecoveryRequired) return;
   if(syncIntervalTimer)clearInterval(syncIntervalTimer);
   syncIntervalTimer=setInterval(()=>{
+    if(sessionRecoveryRequired) return;
     if(!navigator.onLine)return;
-    const hasPending=DB.getSyncQueue().length>0||DB.getSales().some(s=>!s.synced);
-    if(hasPending)syncToCloud(true);
+    if(computePendingSyncCount()>0)syncToCloud(true);
   },AUTO_SYNC_INTERVAL_MS);
 }
 
@@ -4919,8 +5070,7 @@ function initApp(){
   updateWholesaleVisibility();
   renderDashboard();renderSessionTable();renderOutstanding();renderInventory();renderRecords();renderAudit();
   if(navigator.onLine){
-    const hasPending=DB.getSyncQueue().length>0 || sales.some(s=>!s.synced);
-    if(hasPending){
+    if(computePendingSyncCount()>0){
       if(currentPanelId !== 'admin'){
         toast('Resuming backup of offline data...','info');
       }
