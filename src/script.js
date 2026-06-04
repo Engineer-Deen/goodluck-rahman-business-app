@@ -185,6 +185,7 @@ let lastNetworkOnline=null;
 let pendingRegistrationPhoto=null;
 let profileAccessUnlocked=false;
 let currentPanelId='welcome';
+let sessionExpiredPopupShown=false;
 /** True when user opened wholesale from the login welcome CTA (show nav tab before full auth). */
 let wholesaleBrowseWithoutLogin=false;
 let wholesaleRegisteredUsers=[];
@@ -1898,6 +1899,7 @@ function isAuthError(err){
 function showSessionExpiredModal(){
   try{
     if(document.getElementById('session-expired-modal')) return;
+    if(!shouldDisplaySessionExpiredModal()) return;
     // Create overlay
     const overlay=document.createElement('div');
     overlay.id='session-expired-modal';
@@ -1959,6 +1961,7 @@ function showSessionExpiredModal(){
     window.addEventListener('keydown', keyHandler, true);
 
     document.body.appendChild(overlay);
+    sessionExpiredPopupShown = true;
     // trigger CSS animation
     requestAnimationFrame(()=> modal.classList.add('show'));
     // move focus to OK button
@@ -1976,6 +1979,32 @@ function removeSessionExpiredModal(){
     // let animation play then remove
     setTimeout(()=>{ try{ overlay.remove(); }catch(_e){} }, 200);
   }catch(e){ try{ overlay.remove(); }catch(_e){} }
+}
+
+function isPublicAuthRouteActive(){
+  const overlay = document.getElementById('login-overlay');
+  if(!overlay || overlay.style.display === 'none') return false;
+  const currentMode = String(lastLoginOverlayMode || '').trim();
+  return ['welcome','login','register','adminLogin','forgotPassword','forgotPin','wholesalePhone','pin'].includes(currentMode);
+}
+
+function isProtectedRouteActive(){
+  const appEl = document.getElementById('app');
+  if(!appEl || appEl.style.display === 'none') return false;
+  if(!getCurrentUser()) return false;
+  const panel = String(currentPanelId || '').trim();
+  if(!panel) return false;
+  const protectedPanels = new Set(['dashboard','sales','payment','records','inventory','audit','profile','admin']);
+  if(protectedPanels.has(panel)) return true;
+  if(panel === 'wholesale' && !wholesaleBrowseWithoutLogin) return true;
+  return false;
+}
+
+function shouldDisplaySessionExpiredModal(){
+  if(sessionExpiredPopupShown) return false;
+  if(!getCurrentUser()) return false;
+  if(isPublicAuthRouteActive()) return false;
+  return isProtectedRouteActive();
 }
 
 // Production logger: stores events locally and optionally posts to a remote endpoint.
@@ -2069,6 +2098,10 @@ function stopLogFlush(){
 function handleAuthFailure(err){
   console.error('Authentication failure detected', err);
   console.log('Authentication failure detected');
+  if(!shouldDisplaySessionExpiredModal()){
+    console.log('Session expired modal suppressed because the user is not on a protected route or not fully authenticated.');
+    return;
+  }
   sessionRecoveryRequired=true;
   prodLogEvent('auth_failure_detected', { error: String(err?.code||err?.message||err) });
   showSessionExpiredModal();
@@ -2111,6 +2144,7 @@ async function enforceSignOutAndRedirect(){
 
 function clearSessionRecovery(){
   sessionRecoveryRequired=false;
+  sessionExpiredPopupShown=false;
   removeSessionExpiredModal();
   // resume auto sync loop
   startAutoSyncLoop();

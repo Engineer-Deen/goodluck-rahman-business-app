@@ -23,7 +23,20 @@ module.exports = function createAuthRecovery(opts){
 
       if(!isAuthLikeError(err)) return false;
 
-      // Show friendly message in UI immediately (non-blocking)
+      // stop sync and detach listeners
+      try{ if(typeof stopSyncEngine === 'function') stopSyncEngine(); }catch(_e){}
+      try{ if(typeof detachRemoteFirestoreListener === 'function') detachRemoteFirestoreListener(); }catch(_e){}
+
+      // Clear auth-sensitive cached data but preserve queued records
+      try{
+        if(localStore && typeof localStore.deleteScoped === 'function'){
+          // remove cached password/hash keys for current account if present
+          const acct = (context && context.account) || '';
+          if(acct) localStore.deleteScoped('glr_user_password', acct);
+        }
+      }catch(_e){}
+
+      // Show friendly message in UI
       try{
         if(typeof setLoginOverlayMessage === 'function'){
           setLoginOverlayMessage('Your session has expired. Please sign in again.');
@@ -35,33 +48,7 @@ module.exports = function createAuthRecovery(opts){
         }
       }catch(_e){}
 
-      // Run cleanup operations in parallel for faster sign-out
-      const cleanupPromises = [];
-      
-      // Stop sync engine (non-blocking)
-      cleanupPromises.push(Promise.resolve().then(()=>{
-        try{ if(typeof stopSyncEngine === 'function') stopSyncEngine(); }catch(_e){}
-      }));
-      
-      // Detach listeners (non-blocking)
-      cleanupPromises.push(Promise.resolve().then(()=>{
-        try{ if(typeof detachRemoteFirestoreListener === 'function') detachRemoteFirestoreListener(); }catch(_e){}
-      }));
-      
-      // Clear auth-sensitive cached data (non-blocking)
-      cleanupPromises.push(Promise.resolve().then(()=>{
-        try{
-          if(localStore && typeof localStore.deleteScoped === 'function'){
-            const acct = (context && context.account) || '';
-            if(acct) localStore.deleteScoped('glr_user_password', acct);
-          }
-        }catch(_e){}
-      }));
-      
-      // Wait for all cleanup to complete in parallel
-      await Promise.all(cleanupPromises);
-
-      // Finally sign out (after cleanup)
+      // Finally attempt sign out (best-effort)
       try{
         if(typeof signOut === 'function'){
           await signOut();

@@ -50,8 +50,6 @@ function ensureSchema() {
     updatedAt TEXT,
     lastSyncedAt TEXT,
     syncStatus TEXT,
-    version INTEGER DEFAULT 1,
-    deletedAt TEXT,
     PRIMARY KEY(id,account)
   )`).run();
   s(`CREATE TABLE IF NOT EXISTS audit (
@@ -62,8 +60,6 @@ function ensureSchema() {
     updatedAt TEXT,
     lastSyncedAt TEXT,
     syncStatus TEXT,
-    version INTEGER DEFAULT 1,
-    deletedAt TEXT,
     PRIMARY KEY(id,account)
   )`).run();
   s(`CREATE TABLE IF NOT EXISTS sync_queue (
@@ -77,21 +73,6 @@ function ensureSchema() {
     attemptCount INTEGER DEFAULT 0,
     lastAttemptAt TEXT
   )`).run();
-  s(`CREATE TABLE IF NOT EXISTS upload_queue (
-    qid INTEGER PRIMARY KEY AUTOINCREMENT,
-    account TEXT DEFAULT '',
-    taskId TEXT,
-    recordId TEXT,
-    resource TEXT,
-    field TEXT,
-    localUri TEXT,
-    remoteUri TEXT,
-    state TEXT,
-    error TEXT,
-    attemptCount INTEGER DEFAULT 0,
-    createdAt TEXT,
-    updatedAt TEXT
-  )`).run();
   s(`CREATE TABLE IF NOT EXISTS sync_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT,
@@ -102,24 +83,6 @@ function ensureSchema() {
     meta TEXT
   )`).run();
   s(`CREATE TABLE IF NOT EXISTS sync_state (k TEXT PRIMARY KEY, v TEXT)`).run();
-  ensureTableColumns();
-}
-
-function ensureTableColumns() {
-  const tables=[
-    { name:'sales', columns:['version INTEGER DEFAULT 1','deletedAt TEXT'] },
-    { name:'inventory', columns:['version INTEGER DEFAULT 1','deletedAt TEXT'] },
-    { name:'audit', columns:['version INTEGER DEFAULT 1','deletedAt TEXT'] },
-  ];
-  for(const table of tables){
-    const existing = db.prepare(`PRAGMA table_info(${table.name})`).all().map(r=>r.name);
-    for(const columnDef of table.columns){
-      const columnName = columnDef.split(' ')[0];
-      if(!existing.includes(columnName)){
-        db.prepare(`ALTER TABLE ${table.name} ADD COLUMN ${columnDef}`).run();
-      }
-    }
-  }
 }
 
 function serialize(value) {
@@ -339,117 +302,17 @@ function enqueueSync(op, payload, account) {
   return result.lastInsertRowid;
 }
 
-function getUploadQueue(account) {
+function removeQueueItem(qid) {
   if (!db) init();
-  const normalizedAccount = account || '';
-  const rows = db.prepare('SELECT * FROM upload_queue WHERE account = ? ORDER BY qid ASC').all(normalizedAccount);
-  return rows.map((row) => ({
-    qid: row.qid,
-    account: row.account,
-    taskId: row.taskId,
-    recordId: row.recordId,
-    resource: row.resource,
-    field: row.field,
-    localUri: row.localUri,
-    remoteUri: row.remoteUri,
-    state: row.state,
-    error: row.error,
-    attemptCount: row.attemptCount,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  }));
+  db.prepare('DELETE FROM sync_queue WHERE qid = ?').run(qid);
 }
 
-function enqueueUploadTask(task, account) {
+function incrementQueueAttempt(qid) {
   if (!db) init();
-  const normalizedAccount = account || '';
-  const result = db.prepare('INSERT INTO upload_queue (account,taskId,recordId,resource,field,localUri,remoteUri,state,error,attemptCount,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(
-    normalizedAccount,
-    task.taskId || '',
-    task.recordId || '',
-    task.resource || '',
-    task.field || '',
-    task.localUri || '',
-    task.remoteUri || '',
-    task.state || 'pending',
-    task.error || '',
-    task.attemptCount || 0,
+  db.prepare('UPDATE sync_queue SET attemptCount = attemptCount + 1, lastAttemptAt = ? WHERE qid = ?').run(
     new Date().toISOString(),
-    new Date().toISOString(),
+    qid,
   );
-  return result.lastInsertRowid;
-}
-
-function updateUploadTask(qid, updates) {
-  if (!db) init();
-  const fields=[];
-  const values=[];
-  const allowed=['taskId','recordId','resource','field','localUri','remoteUri','state','error','attemptCount','updatedAt'];
-  for(const key of allowed){
-    if(updates[key] !== undefined){
-      fields.push(`${key} = ?`);
-      values.push(updates[key]);
-    }
-  }
-  if(fields.length===0) return;
-  values.push(qid);
-  db.prepare(`UPDATE upload_queue SET ${fields.join(', ')} WHERE qid = ?`).run(...values);
-}
-
-function removeUploadTask(qid) {
-  if (!db) init();
-  db.prepare('DELETE FROM upload_queue WHERE qid = ?').run(qid);
-}
-
-function getUnsyncedRecords(resource, account) {
-  if (!db) init();
-  const table = getResourceTable(resource);
-  if (!table) return [];
-  const normalizedAccount = account || '';
-  const rows = db.prepare(`SELECT * FROM ${table} WHERE account = ? AND (syncStatus IS NULL OR syncStatus != 'synced' OR deletedAt IS NOT NULL) ORDER BY updatedAt ASC`).all(normalizedAccount);
-  return rowsToRecords(rows);
-}
-
-function markRecordAsSynced(resource, id, account, lastSyncedAt) {
-  if (!db) init();
-  const table = getResourceTable(resource);
-  if (!table || !id) return false;
-  const normalizedAccount = account || '';
-  const row = db.prepare(`SELECT * FROM ${table} WHERE account = ? AND id = ?`).get(normalizedAccount, id);
-  if (!row) return false;
-  const record = deserialize(row.payload) || {};
-  record.syncStatus = 'synced';
-  record.synced = true;
-  const payload = serialize(record);
-  db.prepare(`UPDATE ${table} SET payload = ?, syncStatus = ?, lastSyncedAt = ?, updatedAt = ? WHERE account = ? AND id = ?`).run(
-    payload,
-    'synced',
-    lastSyncedAt || new Date().toISOString(),
-    lastSyncedAt || new Date().toISOString(),
-    normalizedAccount,
-    id,
-  );
-  return true;
-}
-
-function setRecordDeleted(resource, id, account, deletedAt) {
-  if (!db) init();
-  const table = getResourceTable(resource);
-  if (!table || !id) return false;
-  const normalizedAccount = account || '';
-  const row = db.prepare(`SELECT * FROM ${table} WHERE account = ? AND id = ?`).get(normalizedAccount, id);
-  if (!row) return false;
-  const record = deserialize(row.payload) || {};
-  record.deletedAt = deletedAt || new Date().toISOString();
-  const payload = serialize(record);
-  db.prepare(`UPDATE ${table} SET payload = ?, deletedAt = ?, updatedAt = ? WHERE account = ? AND id = ?`).run(
-    payload,
-    deletedAt || new Date().toISOString(),
-    deletedAt || new Date().toISOString(),
-    normalizedAccount,
-    id,
-  );
-  return true;
 }
 
 function appendLog(level, uid, code, message, meta) {
@@ -482,12 +345,5 @@ module.exports = {
   enqueueSync,
   removeQueueItem,
   incrementQueueAttempt,
-  getUploadQueue,
-  enqueueUploadTask,
-  updateUploadTask,
-  removeUploadTask,
-  getUnsyncedRecords,
-  markRecordAsSynced,
-  setRecordDeleted,
   appendLog,
 };

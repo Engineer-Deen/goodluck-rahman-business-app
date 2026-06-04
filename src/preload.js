@@ -12,14 +12,10 @@ let syncEngine = null;
 // Initialize localStore with error handling for native modules
 const initializeLocalStore = () => {
   try {
-    if (!LocalStoreModule) {
-      LocalStoreModule = require('./local-store-sqlite');
-    }
-    if (!localStore) {
-      const userDataPath = ipcRenderer.sendSync('app:get-path-sync', 'userData');
-      LocalStoreModule.init({ dir: path.join(userDataPath || __dirname, 'glr-data') });
-      localStore = LocalStoreModule;
-    }
+    if (LocalStoreModule) return localStore; // Already initialized
+    LocalStoreModule = require('./local-store-sqlite');
+    const userDataPath = ipcRenderer.sendSync('app:get-path-sync', 'userData');
+    localStore = LocalStoreModule.init({ dir: path.join(userDataPath || __dirname, 'glr-data') });
     return localStore;
   } catch (err) {
     console.error('Failed to initialize local store:', err.message);
@@ -123,13 +119,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localStoreEnqueueSync: (op, payload, account) => { const store = initializeLocalStore(); return store ? store.enqueueSync(op, payload, account) : null; },
   localStoreRemoveQueueItem: (qid) => { const store = initializeLocalStore(); return store ? store.removeQueueItem(qid) : null; },
   localStoreIncrementQueueAttempt: (qid) => { const store = initializeLocalStore(); return store ? store.incrementQueueAttempt(qid) : null; },
-  localStoreGetUploadQueue: (account) => { const store = initializeLocalStore(); return store ? store.getUploadQueue(account) : []; },
-  localStoreEnqueueUploadTask: (task, account) => { const store = initializeLocalStore(); return store ? store.enqueueUploadTask(task, account) : null; },
-  localStoreUpdateUploadTask: (qid, updates) => { const store = initializeLocalStore(); return store ? store.updateUploadTask(qid, updates) : null; },
-  localStoreRemoveUploadTask: (qid) => { const store = initializeLocalStore(); return store ? store.removeUploadTask(qid) : null; },
-  localStoreGetUnsyncedRecords: (resource, account) => { const store = initializeLocalStore(); return store ? store.getUnsyncedRecords(resource, account) : []; },
-  localStoreMarkRecordAsSynced: (resource, id, account, lastSyncedAt) => { const store = initializeLocalStore(); return store ? store.markRecordAsSynced(resource, id, account, lastSyncedAt) : null; },
-  localStoreSetRecordDeleted: (resource, id, account, deletedAt) => { const store = initializeLocalStore(); return store ? store.setRecordDeleted(resource, id, account, deletedAt) : null; },
   localStoreSetRecords: (resource, records, account, options) => { const store = initializeLocalStore(); return store ? store.setRecords(resource, records, account, options) : null; },
   localStoreAppendLog: (level, uid, code, message, meta) => { const store = initializeLocalStore(); return store ? store.appendLog(level, uid, code, message, meta) : null; },
   createAuthRecovery: (opts) => { const auth = initializeAuthRecovery(); return auth ? auth(opts) : null; },

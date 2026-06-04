@@ -163,12 +163,6 @@ function createWindow() {
     win.webContents.on('did-finish-load', () => {
       console.log('Window loaded successfully (file):', win.webContents.getURL());
     });
-    // Forward renderer console messages to main process console for debugging
-    win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-      try{
-        console.log(`Renderer console [${level}] ${sourceId}:${line} ${message}`);
-      }catch(e){/* ignore */}
-    });
     win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
       console.error('Window failed to load (file):', errorCode, errorDescription, validatedURL);
     });
@@ -228,34 +222,6 @@ function createWindow() {
     console.log('createWindow: created BrowserWindow id=', win && win.id);
     win.webContents.on('did-finish-load', () => {
       console.log('Window loaded successfully:', win.webContents.getURL());
-      // Inject Firebase config directly into the page
-      const firebaseConfig = {
-        apiKey: process.env.FIREBASE_API_KEY || '',
-        authDomain: process.env.FIREBASE_AUTH_DOMAIN || '',
-        projectId: process.env.FIREBASE_PROJECT_ID || '',
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || '',
-        messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '',
-        appId: process.env.FIREBASE_APP_ID || '',
-        databaseURL: process.env.FIREBASE_DATABASE_URL || '',
-      };
-      const configJson = JSON.stringify(firebaseConfig);
-      win.webContents.executeJavaScript(`
-        if (typeof window !== 'undefined') {
-          window.FIREBASE_CONFIG_INJECTED = ${configJson};
-          if (typeof FIREBASE_CONFIG !== 'undefined') {
-            Object.assign(FIREBASE_CONFIG, window.FIREBASE_CONFIG_INJECTED);
-          }
-        }
-      `).catch(err => {
-        console.error('Failed to inject Firebase config:', err);
-      });
-      console.log('Injected Firebase config into renderer:', !!firebaseConfig.apiKey);
-    });
-    // Forward renderer console messages to main process console for debugging
-    win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-      try{
-        console.log(`Renderer console [${level}] ${sourceId}:${line} ${message}`);
-      }catch(e){/* ignore */}
     });
     win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
       console.error('Window failed to load:', errorCode, errorDescription, validatedURL);
@@ -399,15 +365,6 @@ ipcMain.on('store-delete-sync', (event, key) => {
   event.returnValue = true;
 });
 
-ipcMain.on('app:get-path-sync', (event, name) => {
-  try {
-    event.returnValue = app.getPath(name);
-  } catch (err) {
-    console.error('app:get-path-sync failed:', err);
-    event.returnValue = '';
-  }
-});
-
 ipcMain.handle('app:is-packaged', async () => app.isPackaged);
 ipcMain.handle('app:get-version', async () => app.getVersion());
 
@@ -511,15 +468,4 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled rejection in main process:', reason, promise);
-});
-
-// Receive forwarded logs from renderer
-ipcMain.on('renderer:console', (_event, level, message) => {
-  try{ console.log(`Renderer.${level}: ${message}`); }catch(_e){}
-});
-ipcMain.on('renderer:error', (_event, info) => {
-  try{ console.error('Renderer.error event:', info); }catch(_e){}
-});
-ipcMain.on('renderer:unhandledrejection', (_event, info) => {
-  try{ console.error('Renderer.unhandledrejection:', info); }catch(_e){}
 });
